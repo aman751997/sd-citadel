@@ -15,7 +15,7 @@ const idx = all.findIndex((l) => l.id === lesson.id);
 const next = all[idx + 1];
 const prev = all[idx - 1];
 ---
-<Base title={lesson.data.title} description={lesson.data.description}>
+<Base title={lesson.data.title} description={lesson.data.description} track="dsa">
   <article>
     <p class="crumb"><a href={`${BASE}dsa/`}>← DSA Arsenal</a> · pattern lesson · ~{lesson.data.minutes} min</p>
     <h1>{lesson.data.title}</h1>

@@ -1,6 +1,11 @@
-# 🏰 SD Citadel
+# 🏰 The Citadel
 
-Personal system design interview prep portal — a private Hello-Interview. Lessons unlock in order, quizzes are inline, progress lives in localStorage.
+Personal interview prep portal — two wings:
+
+- **`/sd/` — System Design**: 12 pattern-first modules, gated lessons with quizzes + Mermaid diagrams, question bank, delivery-framework cheat sheet.
+- **`/dsa/` — DSA Arsenal**: 20 patterns, 144 problems with LeetCode/LintCode links + done flags, Grimoire-style pattern lessons (Java).
+
+Live: https://aman751997.github.io/citadel/
 
 ## Run locally
 
@@ -9,16 +14,9 @@ npm install
 npm run dev
 ```
 
-## Add a lesson
+## Add content
 
-1. Drop an MDX file in `src/lessons/` with frontmatter: `title`, `description`, `module` (1–4), `order`, `minutes`.
-2. Import `Quiz` from `../components/Quiz.astro` for checkpoints.
-3. Remove the matching "coming soon" entry from `src/modules.ts` if one exists.
-4. Push to `main` — GitHub Actions deploys to Pages automatically.
-
-## Modules
-
-1. **Foundations** — delivery framework, estimation, core concepts
-2. **Key Technologies** — databases, caches, queues, LBs, blob storage, search
-3. **Core Patterns** — realtime, fan-out, contention, geospatial, async jobs
-4. **Problem Walkthroughs** — full 45-minute fights
+- **SD lesson**: MDX in `src/lessons/` (frontmatter: `title`, `description`, `module` 1–12, `order`, `minutes`). Remove matching planned entry in `src/modules.ts`.
+- **DSA pattern lesson**: MDX in `src/dsa-lessons/` (frontmatter: `title`, `description`, `order`, `minutes`). Link it via `lesson:` slug in `src/dsa.ts`.
+- **Question data**: SD bank in `src/bank.ts`, DSA problems in `src/dsa.ts` (keep done flags in sync with Notion).
+- Forge queue + protocol: `CURRICULUM.md`. Push to `main` → auto-deploy via GitHub Actions.

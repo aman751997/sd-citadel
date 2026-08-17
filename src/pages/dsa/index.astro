@@ -10,7 +10,7 @@ const total = DSA.reduce((s, p) => s + p.problems.length, 0);
 const done = DSA.reduce((s, p) => s + p.problems.filter((q) => q.done).length, 0);
 const diffColor: Record<string, string> = { E: 'diff-e', M: 'diff-m', H: 'diff-h' };
 ---
-<Base title="DSA Arsenal" description="All patterns, all problems, all links — the whole coding-round map on one page">
+<Base title="DSA Arsenal" description="All patterns, all problems, all links — the whole coding-round map on one page" track="dsa">
   <h1>⚔️ The DSA Arsenal</h1>
   <p class="lede">
     The whole coding-round map: 20 patterns, {total} problems (Blind75-anchored, NeetCode-150 complete),

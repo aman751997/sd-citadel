@@ -1,127 +1,64 @@
 ---
 import { getCollection } from 'astro:content';
 import Base from '../layouts/Base.astro';
-import { MODULES } from '../modules';
+import { DSA } from '../dsa';
+import { BASE } from '../paths';
 
-const lessons = (await getCollection('lessons')).sort(
-  (a, b) => a.data.module - b.data.module || a.data.order - b.data.order
-);
-import { BASE as base } from '../paths';
-
-// Global unlock order: flat list of lesson ids in curriculum order
-const orderedIds = lessons.map((l) => l.id);
+const sdLessons = await getCollection('lessons');
+const dsaTotal = DSA.reduce((s, p) => s + p.problems.length, 0);
+const dsaDone = DSA.reduce((s, p) => s + p.problems.filter((q) => q.done).length, 0);
 ---
-<Base title="Roadmap">
+<Base title="The Citadel">
   <header class="hero">
-    <h1>The System Design Citadel</h1>
+    <h1>🏰 The Citadel</h1>
     <p class="sub">
-      Your private Hello-Interview. Lessons unlock in order — finish one, the next gate opens.
-      Progress saves in this browser. New lessons get forged as you climb.
+      One engineer's private war college. Two wings, two disciplines — pick today's fight.
+      Somewhere past the misty mountains, the Gatekeeper is waiting.
     </p>
-    <div class="progress-wrap">
-      <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-      <span class="progress-label" id="progress-label">0 / {lessons.length} lessons</span>
-    </div>
   </header>
 
-  {MODULES.map((mod) => {
-    const modLessons = lessons.filter((l) => l.data.module === mod.id);
-    return (
-      <section class="module">
-        <h2 class="module-title">{mod.icon} Module {mod.id} — {mod.title}</h2>
-        <p class="module-tagline">{mod.tagline}</p>
-        <div class="lesson-grid">
-          {modLessons.map((l) => (
-            <a
-              href={`${base}lessons/${l.id}/`}
-              class="lesson-card"
-              data-lesson-id={l.id}
-              data-unlock-order={orderedIds.indexOf(l.id)}
-            >
-              <span class="lesson-state" data-state-icon>🔒</span>
-              <div>
-                <div class="lesson-title">{l.data.title}</div>
-                <div class="lesson-desc">{l.data.description}</div>
-                <div class="lesson-meta">~{l.data.minutes} min</div>
-              </div>
-            </a>
-          ))}
-          {mod.planned.map((p) => (
-            <div class="lesson-card planned">
-              <span class="lesson-state">🛠️</span>
-              <div>
-                <div class="lesson-title">{p.title}</div>
-                <div class="lesson-desc">{p.description}</div>
-                <div class="lesson-meta">coming soon — forged on demand</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-    );
-  })}
+  <div class="tracks">
+    <a class="track sd" href={`${BASE}sd/`}>
+      <div class="track-icon">🏗️</div>
+      <h2>System Design</h2>
+      <p>12 pattern-first modules · {sdLessons.length} lessons forged · quizzes, diagrams, walkthroughs.
+      Lessons unlock in order; each ends in a live rep with the buddy.</p>
+      <span class="cta">Enter the SD wing →</span>
+    </a>
+    <a class="track dsa" href={`${BASE}dsa/`}>
+      <div class="track-icon">⚔️</div>
+      <h2>DSA</h2>
+      <p>20 patterns · {dsaTotal} problems, every one linked · {dsaDone} slain.
+      Pattern lessons with Java templates, invariants, and your own bug bestiary.</p>
+      <span class="cta">Enter the Arsenal →</span>
+    </a>
+  </div>
+
+  <p class="foot-note">
+    Progress lives in this browser and on the Notion campaign hub. Mocks, drills, and grills run with
+    <code>/interview-buddy</code> — the Citadel is where you study; the buddy is where you bleed.
+  </p>
 </Base>
 
 <style>
-  .hero { margin-bottom: 1.5rem; }
-  .sub { color: var(--text-dim); max-width: 60ch; }
-  .progress-wrap { display: flex; align-items: center; gap: 0.9rem; margin-top: 1.1rem; }
-  .progress-bar {
-    flex: 1; height: 10px; background: var(--bg-raised);
-    border: 1px solid var(--border); border-radius: 99px; overflow: hidden;
-  }
-  .progress-fill {
-    height: 100%; width: 0%;
-    background: linear-gradient(90deg, var(--accent-dim), var(--accent));
-    border-radius: 99px; transition: width 0.5s ease;
-  }
-  .progress-label { font-size: 0.82rem; color: var(--text-dim); font-family: var(--mono); white-space: nowrap; }
-  .module { margin-top: 2.4rem; }
-  .module-title { border: none; margin-bottom: 0.2rem; }
-  .module-tagline { color: var(--text-dim); font-size: 0.92rem; margin-top: 0; }
-  .lesson-grid { display: grid; gap: 0.7rem; margin-top: 1rem; }
-  .lesson-card {
-    display: flex; gap: 0.9rem; align-items: flex-start;
-    padding: 0.95rem 1.1rem;
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+  .hero { text-align: center; margin: 2rem 0 2.5rem; }
+  .hero h1 { font-size: 2.4rem; }
+  .sub { color: var(--text-dim); max-width: 52ch; margin: 0.5rem auto 0; }
+  .tracks { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+  @media (max-width: 640px) { .tracks { grid-template-columns: 1fr; } }
+  .track {
+    display: block; padding: 1.6rem 1.5rem; border-radius: var(--radius);
+    background: var(--bg-raised); border: 1px solid var(--border);
     text-decoration: none; color: var(--text);
-    transition: border-color 0.15s, background 0.15s;
+    transition: border-color 0.15s, transform 0.15s;
   }
-  a.lesson-card:hover:not(.locked) { border-color: var(--accent-dim); background: var(--bg-hover); }
-  .lesson-card.locked { opacity: 0.55; pointer-events: none; }
-  .lesson-card.done { border-color: rgba(63, 185, 80, 0.45); }
-  .lesson-card.planned { opacity: 0.45; }
-  .lesson-state { font-size: 1.15rem; line-height: 1.5; }
-  .lesson-title { font-weight: 600; }
-  .lesson-desc { font-size: 0.86rem; color: var(--text-dim); margin-top: 0.15rem; }
-  .lesson-meta { font-size: 0.75rem; color: var(--text-dim); font-family: var(--mono); margin-top: 0.35rem; }
+  .track:hover { transform: translateY(-2px); }
+  .track.sd:hover { border-color: var(--blue); }
+  .track.dsa:hover { border-color: var(--accent); }
+  .track-icon { font-size: 2rem; }
+  .track h2 { border: none; margin: 0.5rem 0 0.4rem; }
+  .track p { color: var(--text-dim); font-size: 0.92rem; }
+  .track.sd .cta { color: var(--blue); font-weight: 600; font-size: 0.92rem; }
+  .track.dsa .cta { color: var(--accent); font-weight: 600; font-size: 0.92rem; }
+  .foot-note { text-align: center; color: var(--text-dim); font-size: 0.85rem; margin-top: 2.5rem; }
 </style>
-
-<script>
-  const done: string[] = JSON.parse(localStorage.getItem('sdc-progress') || '[]');
-  const cards = [...document.querySelectorAll<HTMLElement>('[data-lesson-id]')].sort(
-    (a, b) => Number(a.dataset.unlockOrder) - Number(b.dataset.unlockOrder)
-  );
-  let gateOpen = true; // first incomplete lesson stays unlocked; everything after locks
-  for (const card of cards) {
-    const id = card.dataset.lessonId!;
-    const icon = card.querySelector('[data-state-icon]')!;
-    if (done.includes(id)) {
-      card.classList.add('done');
-      icon.textContent = '✅';
-    } else if (gateOpen) {
-      icon.textContent = '▶️';
-      gateOpen = false;
-    } else {
-      card.classList.add('locked');
-    }
-  }
-  const fill = document.getElementById('progress-fill');
-  const label = document.getElementById('progress-label');
-  const total = cards.length;
-  const doneCount = cards.filter((c) => done.includes(c.dataset.lessonId!)).length;
-  if (fill && total > 0) fill.style.width = `${(doneCount / total) * 100}%`;
-  if (label) label.textContent = `${doneCount} / ${total} lessons`;
-</script>

@@ -2,9 +2,10 @@
 interface Props {
   title: string;
   description?: string;
+  track?: 'sd' | 'dsa';
 }
 import { BASE as base } from '../paths';
-const { title, description = 'Personal system design interview prep portal' } = Astro.props;
+const { title, description = 'Personal interview prep portal', track } = Astro.props;
 ---
 <!doctype html>
 <html lang="en">
@@ -12,17 +13,33 @@ const { title, description = 'Personal system design interview prep portal' } = 
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />
-    <title>{title} · SD Citadel</title>
+    <title>{title} · The Citadel</title>
     <link rel="icon" href={`data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏰</text></svg>`} />
   </head>
   <body>
     <nav class="topnav">
-      <a href={base} class="brand">🏰 SD Citadel</a>
+      <a href={base} class="brand">🏰 The Citadel</a>
       <div class="navlinks">
-        <a href={base}>System Design</a>
-        <a href={`${base}bank/`}>SD Bank</a>
-        <a href={`${base}dsa/`}>DSA</a>
-        <a href={`${base}framework/`}>Cheat Sheet</a>
+        {track === 'sd' && (
+          <>
+            <span class="track-chip sd-chip">SD wing</span>
+            <a href={`${base}sd/`}>Roadmap</a>
+            <a href={`${base}sd/bank/`}>Question Bank</a>
+            <a href={`${base}sd/framework/`}>Cheat Sheet</a>
+          </>
+        )}
+        {track === 'dsa' && (
+          <>
+            <span class="track-chip dsa-chip">DSA wing</span>
+            <a href={`${base}dsa/`}>Arsenal</a>
+          </>
+        )}
+        {!track && (
+          <>
+            <a href={`${base}sd/`}>System Design</a>
+            <a href={`${base}dsa/`}>DSA</a>
+          </>
+        )}
       </div>
       <span id="xp-badge" class="xp-badge" title="Lessons completed"></span>
     </nav>
@@ -81,7 +98,13 @@ const { title, description = 'Personal system design interview prep portal' } = 
     text-decoration: none;
     letter-spacing: 0.01em;
   }
-  .navlinks { display: flex; gap: 1.1rem; flex: 1; }
+  .navlinks { display: flex; gap: 1.1rem; flex: 1; align-items: center; }
+  .track-chip {
+    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    border-radius: 99px; padding: 0.15rem 0.6rem;
+  }
+  .sd-chip { background: rgba(88, 166, 255, 0.14); color: var(--blue); border: 1px solid var(--blue); }
+  .dsa-chip { background: rgba(227, 179, 65, 0.14); color: var(--accent); border: 1px solid var(--accent-dim); }
   .navlinks a {
     color: var(--text-dim);
     text-decoration: none;

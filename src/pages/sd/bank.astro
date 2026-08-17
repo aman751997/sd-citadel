@@ -1,11 +1,11 @@
 ---
-import Base from '../layouts/Base.astro';
-import { BANK, PAPERS } from '../bank';
+import Base from '../../layouts/Base.astro';
+import { BANK, PAPERS } from '../../bank';
 
 const stars = (n: number) => '★'.repeat(n) + '☆'.repeat(3 - n);
 const total = BANK.reduce((s, t) => s + t.questions.length, 0);
 ---
-<Base title="Question Bank" description="Every SD question type, mapped to the lesson that covers it">
+<Base title="SD Question Bank" description="Every SD question type, mapped to the lesson that covers it" track="sd">
   <h1>🎯 The Question Bank</h1>
   <p class="lede">
     {total} questions — the full landscape of what SD rounds ask (web-validated 2026, mirrored from the Notion Master Sheet).
@@ -46,7 +46,7 @@ const total = BANK.reduce((s, t) => s + t.questions.length, 0);
 
   <h2>How to use this page</h2>
   <ol>
-    <li>Don't grind this list top to bottom — grind the <a href={import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : import.meta.env.BASE_URL + '/'}>roadmap lessons</a>; they're built to cover every row here.</li>
+    <li>Don't grind this list top to bottom — grind the <a href={`${(import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : import.meta.env.BASE_URL + '/')}sd/`}>roadmap lessons</a>; they're built to cover every row here.</li>
     <li>Before an interview at company X: scan the tiers, pick the 2–3 rows they're known to ask, mock those with the buddy.</li>
     <li>A row with no walkthrough is still fair game for a mock — its "covered by" lessons are the prep.</li>
   </ol>
