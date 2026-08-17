@@ -57,7 +57,7 @@ export const DSA: DsaPattern[] = [
     ],
   },
   {
-    id: 3, title: 'Prefix Sum', fires: 'range-sum queries, subarray-sum = K',
+    id: 3, title: 'Prefix Sum', fires: 'range-sum queries, subarray-sum = K', lesson: 'prefix-sum',
     problems: [
       { name: 'Range Sum Query — Immutable', lc: 'range-sum-query-immutable', sub: 'Standard 1D', diff: 'E', trigger: 'Many range-sum queries fast' },
       { name: 'Find Pivot Index', lc: 'find-pivot-index', sub: 'Standard 1D', diff: 'E', trigger: 'Left sum vs right sum of an index' },
@@ -67,7 +67,7 @@ export const DSA: DsaPattern[] = [
     ],
   },
   {
-    id: 4, title: 'Intervals', fires: 'overlapping ranges, meeting rooms',
+    id: 4, title: 'Intervals', fires: 'overlapping ranges, meeting rooms', lesson: 'intervals',
     problems: [
       { name: 'Merge Intervals', lc: 'merge-intervals', sub: 'Merge & Insert', diff: 'M', trigger: 'Overlapping time periods', b75: true },
       { name: 'Insert Interval', lc: 'insert-interval', sub: 'Merge & Insert', diff: 'M', trigger: 'New range into sorted ranges', b75: true },
@@ -77,7 +77,7 @@ export const DSA: DsaPattern[] = [
     ],
   },
   {
-    id: 5, title: 'Linked Lists', fires: 'pointer surgery, cycle, O(1) cache',
+    id: 5, title: 'Linked Lists', fires: 'pointer surgery, cycle, O(1) cache', lesson: 'linked-lists',
     problems: [
       { name: 'Linked List Cycle', lc: 'linked-list-cycle', sub: 'Fast & Slow', diff: 'E', trigger: 'Does it loop? (Tortoise & Hare)', b75: true },
       { name: 'Middle of the Linked List', lc: 'middle-of-the-linked-list', sub: 'Fast & Slow', diff: 'E', trigger: 'Exact center in one pass' },
@@ -93,7 +93,7 @@ export const DSA: DsaPattern[] = [
     ],
   },
   {
-    id: 6, title: 'Binary Search', fires: 'sorted / minimize-the-max / log-time',
+    id: 6, title: 'Binary Search', fires: 'sorted / minimize-the-max / log-time', lesson: 'binary-search',
     problems: [
       { name: 'Binary Search', lc: 'binary-search', sub: 'Standard', diff: 'E', trigger: 'O(log N) on sorted array' },
       { name: 'Search a 2D Matrix', lc: 'search-a-2d-matrix', sub: 'Standard', diff: 'M', trigger: 'Sorted 2D grid, rows flow sequentially' },
@@ -108,7 +108,7 @@ export const DSA: DsaPattern[] = [
     ],
   },
   {
-    id: 7, title: 'Stacks', fires: 'nesting, next-greater/smaller, histogram',
+    id: 7, title: 'Stacks', fires: 'nesting, next-greater/smaller, histogram', lesson: 'stacks',
     problems: [
       { name: 'Valid Parentheses', lc: 'valid-parentheses', sub: 'Standard', diff: 'E', trigger: 'Matching nested pairs', b75: true },
       { name: 'Min Stack', lc: 'min-stack', sub: 'Standard', diff: 'M', trigger: 'O(1) minimum on a stack' },
@@ -120,7 +120,7 @@ export const DSA: DsaPattern[] = [
     ],
   },
   {
-    id: 8, title: 'Heaps / Priority Queue', fires: 'K-th, running median, merge-K, scheduling',
+    id: 8, title: 'Heaps / Priority Queue', fires: 'K-th, running median, merge-K, scheduling', lesson: 'heaps',
     problems: [
       { name: 'Kth Largest Element in an Array', lc: 'kth-largest-element-in-an-array', sub: 'Top K', diff: 'M', trigger: 'Kth largest/smallest, unsorted' },
       { name: 'Top K Frequent Elements', lc: 'top-k-frequent-elements', sub: 'Top K', diff: 'M', trigger: 'Most frequent K', b75: true },

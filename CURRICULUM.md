@@ -41,13 +41,14 @@
 ## DSA status
 
 - `/dsa/` page: all 20 patterns, 144 problems, LC + LintCode links, done flags mirroring Notion. ✅ live
-- Pattern lessons forged: **two-pointers**, **sliding-window** (the taught patterns — drill-design rule respected).
-- Queue (per campaign timeline / Grimoire cadence): Prefix Sum → Intervals → Linked Lists → Binary Search → Stacks → … (forge each when its week opens or pattern kicks off, enriched with that week's real bugs).
+- Pattern lessons forged (1–8, user directive 2026-08-17): **two-pointers, sliding-window, prefix-sum, intervals, linked-lists, binary-search, stacks, heaps** — Act I DSA surface fully covered. Drill-design rule still governs RECOGNITION drills (taught-in-session patterns only); lessons ahead of reps are reference, teach before drilling.
+- Queue: patterns 9–20 (Trees DFS/BFS → Graphs → Backtracking → DP → Tries → Math/Bit → Greedy → Hashing → Matrix) — forge as Act II/III weeks open, enrich with real bugs.
 
 ## Coverage map
-`src/bank.ts` (46 SD questions) → all map to forged theory; 17 walkthroughs queued. `src/dsa.ts` (144 problems) → 2/20 pattern lessons forged, rest gated on campaign progress per the recognition-drill doctrine.
+`src/bank.ts` (46 SD questions) → all map to forged theory; 17 walkthroughs queued. `src/dsa.ts` (144 problems) → 8/20 pattern lessons forged (all of Act I). DSA page now has click-to-mark solves + copy-progress (localStorage overlay; baked flags stay the synced truth).
 
 ## Session log
 - 2026-08-17 — v1 shipped: framework, estimation, rate-limiter; portal live; doctrine locked.
 - 2026-08-17 — Coverage expansion: /bank page, curriculum → modules, gap register imported.
 - 2026-08-17 — **THE GREAT THEORY FORGE**: all 19 remaining SD theory lessons (M1–M2 complete, 8 pattern lessons, 5 AI-era) with Mermaid + quizzes; curriculum restructured PATTERN-FIRST (12 modules — pattern theory + its walkthroughs clubbed, per user directive); files renamed to semantic slugs; DSA wing added (/dsa/: 20 patterns, 144 problems, LC/LintCode links, done flags; two-pointers + sliding-window lessons ported from Grimoire with Java + bestiaries). SD theory scaffolding era CLOSED — only walkthroughs + reps remain.
+- 2026-08-17 — DSA forge to pattern 8 (user directive): prefix-sum, intervals, linked-lists, binary-search, stacks, heaps lessons (Java + Mermaid + bestiaries); Arsenal page gains click-to-mark solves + copy-progress button; SD roadmap copy-progress shipped earlier today.

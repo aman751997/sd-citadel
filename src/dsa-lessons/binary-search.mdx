@@ -1,0 +1,145 @@
+---
+title: 'Binary Search'
+description: 'One loop template, six disguises — standard, boundaries, rotated arrays, and the minimax "search on the answer" trick that cracks Koko.'
+order: 6
+minutes: 35
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## When this pattern fires
+
+Three triggers, increasingly disguised:
+
+1. **Sorted input** + find something → obvious.
+2. **"O(log n) required"** in the constraints → the problem is *telling* you.
+3. **"Minimize the maximum / minimum X such that condition holds"** — nothing is sorted, but the ANSWER SPACE is monotonic. This disguise is where the pattern gets interesting (and where interviews live).
+
+The core property is always the same: a predicate that flips **once** — `FFFF|TTTT` — over some ordered space. Binary search finds the flip point. Everything below is choosing the space and the predicate.
+
+## The one template (boundary form — learn THIS one)
+
+```java
+// find the FIRST index where condition(i) is true  (FFFF|TTTT → first T)
+int lo = 0, hi = n;              // hi = n, NOT n-1: "not found" parks at n
+while (lo < hi) {
+    int mid = lo + (hi - lo) / 2;   // overflow-safe midpoint
+    if (condition(mid)) hi = mid;    // mid could be the answer — keep it in range
+    else lo = mid + 1;               // mid is definitely not — skip past it
+}
+return lo;                            // lo == hi == first true (or n)
+```
+
+Why this form beats the classic `lo <= hi` version: no `-1`/`+1` symmetry to fumble, no infinite-loop risk (the range strictly shrinks: `hi = mid` is fine because `mid < hi` always), and **every variant below is just a different `condition`**. Exact-match search? `condition = nums[i] >= target`, then check `nums[lo] == target`.
+
+**First and Last Position** = two boundary searches: first `>= target`, first `> target` (answer is that minus one). One template, run twice.
+
+## Rotated arrays — one sorted half, always
+
+A rotated sorted array `[4,5,6,7,0,1,2]`: at any `mid`, **at least one half is properly sorted**. Compare `nums[mid]` with `nums[hi]` to find which:
+
+```java
+// Find Minimum in Rotated Sorted Array
+int lo = 0, hi = nums.length - 1;
+while (lo < hi) {
+    int mid = lo + (hi - lo) / 2;
+    if (nums[mid] > nums[hi]) lo = mid + 1;  // min is in the right (unsorted) half
+    else hi = mid;                            // mid could BE the min — keep it
+}
+return nums[lo];
+```
+
+Compare with `nums[hi]`, **not `nums[lo]`** — an already-sorted array (no rotation) breaks the lo-comparison logic. **Search in Rotated Sorted Array**: same halving; per step, identify the sorted half, check whether target lies inside it (both boundary comparisons!), recurse into the correct half.
+
+## Minimax — binary search ON THE ANSWER
+
+The disguise that wins interviews. "**Koko eats bananas**: minimum speed k to finish all piles in h hours." Nothing is sorted... but ask: *"can she finish at speed k?"* — if yes at k, yes at every k+1. The predicate flips once over the answer space `1..max(piles)`:
+
+<Mermaid code={`flowchart LR
+    A["speed k: 1 2 3 4 5 6 7 8"] --> B["canFinish: F F F F T T T T"]
+    B --> C["binary search the flip:\nanswer = first T = 5"]`} />
+
+```java
+public int minEatingSpeed(int[] piles, int h) {
+    int lo = 1, hi = Arrays.stream(piles).max().getAsInt();
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (canFinish(piles, mid, h)) hi = mid; else lo = mid + 1;
+    }
+    return lo;
+}
+private boolean canFinish(int[] piles, int k, int h) {
+    long hours = 0;
+    for (int p : piles) hours += (p + k - 1) / k;   // ceil division
+    return hours <= h;
+}
+```
+
+The recipe, speakable in one breath: **(1)** answer space with monotonic feasibility, **(2)** a `canDo(x)` checker (usually greedy, O(n)), **(3)** boundary-search the flip. **Ship Packages** (capacity space: max(weights)..sum(weights)) and **Split Array Largest Sum** (same space!) are the identical recipe — Split Array is "Hard" only until you've seen the costume.
+
+**Search a 2D Matrix**: rows flow sequentially → it's a sorted 1D array wearing a coat: index `0..m*n-1`, map `mid → matrix[mid/cols][mid%cols]`.
+
+**Time-Based KV Store**: per key, a list of (timestamp, value) appended in order — "value at-or-before T" = boundary search for last `<= T`. Binary search as a *component* inside a design-flavored problem.
+
+(Median of Two Sorted Arrays — partition search — is its own beast; fight it after the minimax trio, not before.)
+
+## Recognition table
+
+| You see | Space searched | Predicate |
+|---------|---------------|-----------|
+| sorted array + target | indexes | `nums[i] >= target` |
+| "first/last occurrence" | indexes | two boundary runs |
+| rotated sorted array | indexes | which half is sorted vs `nums[hi]` |
+| "min speed/capacity/days such that…" | **answer values** | `canDo(x)` greedy checker |
+| "minimize the largest chunk" | answer values | same — minimax costume |
+| sorted-by-time versions | timestamps | last `<= T` |
+| "O(log n)" in constraints | (the problem told you) | find the monotone thing |
+
+## Bug bestiary (pre-loaded)
+
+- **`lo + (hi-lo)/2`** — `(lo+hi)/2` overflows on big indexes; write the safe form on reflex.
+- **`hi = mid - 1` in the boundary template** → skips the answer. `hi = mid` keeps candidates; only `lo` jumps past.
+- **Infinite loop from mixing templates** — `while (lo < hi)` with `lo = mid` (no +1) never terminates when `hi = lo+1`. Pick the template, keep its moves.
+- **Rotated: comparing mid with `nums[lo]`** — breaks on unrotated input.
+- **Minimax bounds wrong** — Ship Packages lo = max(weights) (a package must fit), not 1. Bounds come from the problem's physics; derive, don't default.
+- **Checker overflow** — hours/sums in `long`.
+
+<Quiz questions={[
+  {
+    q: 'Boundary template: condition(mid) is true. Why hi = mid and not hi = mid − 1?',
+    options: [
+      'Off-by-one convention, either works',
+      'mid itself might BE the first true — mid−1 can throw the answer out of the range. False mids get skipped (lo = mid+1) because they are proven non-answers; true mids are kept as candidates',
+      'hi = mid − 1 causes overflow',
+      'To keep the loop O(log n)'
+    ],
+    answer: 1,
+    why: 'The asymmetry (keep-true, skip-false) is the entire template. Fumbling it produces the classic "returns the element after the answer" bug.'
+  },
+  {
+    q: '"Minimum capacity to ship all packages within D days" — why is this binary search when nothing is sorted?',
+    options: [
+      'Sort the weights first',
+      'Feasibility is monotonic over the ANSWER space: if capacity c works, c+1 works — canShip(c) is FFFF|TTTT over [max(weight), sum(weights)]; binary search the flip with a greedy O(n) checker',
+      'It is actually DP, binary search is a heuristic',
+      'The days are sorted'
+    ],
+    answer: 1,
+    why: 'Search-on-answer: the sorted thing is the invisible feasibility function, not the input. Naming the bounds from the problem\'s physics (max ≤ answer ≤ sum) is part of the answer.'
+  },
+  {
+    q: 'Find Minimum in Rotated: why compare nums[mid] against nums[hi] rather than nums[lo]?',
+    options: [
+      'hi comparisons are cache-friendlier',
+      'Against hi, the test cleanly splits "min is right of mid" from "mid could be min" — and stays correct when the array is NOT rotated at all; the lo-comparison misroutes exactly that already-sorted case',
+      'nums[lo] might be the minimum',
+      'Either comparison works identically'
+    ],
+    answer: 1,
+    why: 'The unrotated array is the edge case that kills the lo-variant. Test your loop mentally on [1,2,3] before declaring done — 10-second habit, catches this whole class.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: **Binary Search + First/Last Position** (template reps, narrate keep-true/skip-false) → **Find Min in Rotated** → then the minimax trio in one sitting: **Koko → Ship Packages → Split Array** — watching the "Hard" fall to the same recipe as the Mediums is a designed Recognition Fear kill.

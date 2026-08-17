@@ -1,0 +1,136 @@
+---
+title: 'Stacks'
+description: 'Standard stacks for nesting, monotonic stacks for next-greater — including the histogram boss and why "waiting for an answer" is the trigger.'
+order: 7
+minutes: 30
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## When this pattern fires
+
+Two distinct triggers, two sub-patterns:
+
+1. **Nesting / matching / undo** — brackets, expressions, "most recent open thing must close first". Last-in-first-out is literally the problem statement.
+2. **"Next greater/smaller element"** — for each element, find the nearest one to its right (or left) that beats it. The disguises: next warmer day, cars catching up, histogram rectangles, stock spans. This is the **monotonic stack**, and it's the sub-pattern interviews actually test.
+
+Java note: use `ArrayDeque` as your stack (`push/pop/peek`), not the legacy `Stack` class — say it, it's free polish.
+
+## Form 1 — Standard Stack
+
+**Valid Parentheses** — the hello-world: push opens; on a close, the top must be its partner.
+
+```java
+public boolean isValid(String s) {
+    Deque<Character> st = new ArrayDeque<>();
+    for (char c : s.toCharArray()) {
+        switch (c) {
+            case '(' -> st.push(')');
+            case '[' -> st.push(']');
+            case '{' -> st.push('}');
+            default -> { if (st.isEmpty() || st.pop() != c) return false; }
+        }
+    }
+    return st.isEmpty();          // leftovers = unclosed opens
+}
+```
+
+(Pushing the *expected closer* makes the check one comparison — a small trick worth stealing.) Two classic misses: closing on an **empty stack** (`")("`), and **non-empty stack at the end** (`"(("`). Both in the quiz.
+
+**Min Stack** — O(1) minimum: a second stack tracking the min *as of each level* (push `min(x, curMin)` alongside; pop both together). The general lesson: **augment the stack with per-level metadata** instead of recomputing.
+
+**Evaluate RPN** — numbers push; operators pop two, compute, push. One trap: operand order — `b op a` where `a` popped first (`5 3 -` = 5−3: the SECOND pop is the left operand).
+
+## Form 2 — Monotonic Stack (the real content)
+
+**The reframe that makes it click:** elements sit on the stack because they're **still waiting for their answer**. When a new element arrives, it *answers* everyone on the stack it beats — pop them, record their answers — then waits itself.
+
+```java
+// Daily Temperatures — for each day, days until a warmer one
+public int[] dailyTemperatures(int[] T) {
+    int[] ans = new int[T.length];
+    Deque<Integer> waiting = new ArrayDeque<>();      // indexes, temps DECREASING top-down... 
+    for (int today = 0; today < T.length; today++) {  // (bottom-up increasing? no: stack holds strictly decreasing temps)
+        while (!waiting.isEmpty() && T[today] > T[waiting.peek()]) {
+            int answered = waiting.pop();              // today answers this day
+            ans[answered] = today - answered;
+        }
+        waiting.push(today);                           // today now waits
+    }
+    return ans;                                        // never-answered days stay 0
+}
+```
+
+<Mermaid code={`flowchart LR
+    A["temps: 73 74 75 71 69 72"] --> B["74 arrives → answers 73 (pop)\n75 arrives → answers 74\n71, 69 stack up (waiting)\n72 arrives → answers 69, then 71\n75 still waiting → 0"]`} />
+
+**Why O(n) despite the nested while:** every element is pushed once and popped at most once — the while's total work across the whole run is n pops. Say this; the "isn't that O(n²)?" probe is standard.
+
+Which monotonic direction? **Next greater → stack holds decreasing values** (an increasing arrival breaks the order = answers people). Next smaller → increasing stack. Derive it from "who gets answered", don't memorize.
+
+**Next Greater Element II** (circular): loop `2n` times with `i % n`; second lap only answers, never pushes (or push guarded by `i < n`).
+
+**Car Fleet** — monotonic *thinking* without an explicit stack: sort cars by position (closest to target first), compute each car's solo arrival time; sweep — a car catching a slower fleet ahead merges into it (its time gets clamped). Count the distinct times that survive = fleets. The "merge into the thing ahead of you" logic is stack logic in disguise.
+
+**Largest Rectangle in Histogram** — the boss. For each bar: the widest rectangle with THIS bar's height extends until the first *shorter* bar on each side — a next-smaller-element question, both directions at once. Increasing-height stack; when a shorter bar arrives, pop and finalize each taller bar: `height[popped] × (i − stack.peekAfterPop − 1)`. Two implementation saves: **sentinel 0-height bar appended** (flushes the stack at the end) and width when stack empties = `i` (the popped bar saw nothing shorter to its left). This problem is a Hard because of these seams, not the idea — walk it slowly with the buddy before attempting solo.
+
+## Recognition table
+
+| You see | Move |
+|---------|------|
+| brackets / nesting / "valid sequence" | standard stack, match on close |
+| "undo", "most recent first", expression eval | standard stack |
+| "next greater/warmer/higher …" | monotonic decreasing stack, pop = answered |
+| "next smaller" / "first shorter" | monotonic increasing stack |
+| circular array variant | 2n sweep with i % n |
+| "max rectangle/area under heights" | histogram: next-smaller both sides |
+| "X catches up to / merges with Y ahead" | fleet-style sweep (stack thinking) |
+
+## Bug bestiary (pre-loaded)
+
+- **Pop on empty** — `")("`; always `isEmpty()` before pop/peek.
+- **Forgetting the end-check** — `"(("` returns true if you only check during the loop.
+- **RPN operand order** — second pop is the left operand.
+- **Storing values when you need indexes** — Daily Temperatures needs distances; push indexes, compare via `T[idx]`.
+- **Histogram: no sentinel flush** — bars still on the stack at the end were never finalized; the answer silently excludes suffix rectangles.
+- **`>=` vs `>` in the pop condition** — equal elements: decide who answers whom, be consistent (usually strict `>` for next-strictly-greater).
+
+<Quiz questions={[
+  {
+    q: 'Monotonic stack for Daily Temperatures: what does an element sitting ON the stack represent?',
+    options: [
+      'A local maximum',
+      'A day still WAITING for its answer (no warmer day seen yet) — arrivals pop and answer everyone they beat, then wait themselves; that framing also derives the stack\'s decreasing order',
+      'A day warmer than today',
+      'The running window of K days'
+    ],
+    answer: 1,
+    why: 'The waiting-room mental model IS the pattern — it derives the invariant, the pop condition, and the direction, instead of memorizing "decreasing stack for next greater".'
+  },
+  {
+    q: 'Interviewer: "nested while inside a for — isn\'t your solution O(n²)?" Answer:',
+    options: [
+      'Yes, but fast in practice',
+      'No — each element is pushed exactly once and popped at most once, so all whiles combined do at most n pops: amortized O(n) total',
+      'The while runs at most log n times',
+      'The stack is bounded by a constant'
+    ],
+    answer: 1,
+    why: 'Amortized analysis via push/pop budget. This exact probe is the standard follow-up to every monotonic stack solution — have the two-sentence answer loaded.'
+  },
+  {
+    q: 'Histogram: bar of height 6 is popped when a bar of height 2 arrives at index i. Its rectangle\'s width is:',
+    options: [
+      'i minus the popped bar\'s own index',
+      'From just after the NEW stack top (first shorter bar on its left) to just before i (first shorter on its right): i − stack.peek() − 1, or i if the stack emptied',
+      'Always 1 — bars are unit width',
+      'The number of pops so far'
+    ],
+    answer: 1,
+    why: 'The width seam is where this Hard actually lives: both boundaries are next-SMALLER elements, and the empty-stack case (nothing shorter to the left) must widen to i. Get this line right and the problem is done.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: **Valid Parentheses** (5-min warm-up) → **Daily Temperatures** — already queued on the hub as your Stack kickoff since July 1st, trigger pre-recognized; time to collect — → **Next Greater II** (circular twist). **Histogram** gets a guided walk first, solo re-fight 2 days later.

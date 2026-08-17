@@ -17,7 +17,10 @@ const diffColor: Record<string, string> = { E: 'diff-e', M: 'diff-m', H: 'diff-h
     every one linked. Learn the pattern lesson, then fight its problems in order. <strong>{done}/{total} slain.</strong>
     💎 = LeetCode premium (free LintCode mirror linked).
   </p>
-  <p class="lede dim">Statuses mirror Notion (tracker of record). Solved something? Tell the buddy — both get updated.</p>
+  <p class="lede dim">
+    Statuses mirror Notion (tracker of record). Solved something? <strong>Click its ⬜ to mark it</strong> (saves in this browser),
+    then <button id="copy-dsa-progress" type="button">📋 Copy progress</button> and paste to the buddy — Notion + this page's baked flags both get updated.
+  </p>
 
   {DSA.map((pat) => {
     const lesson = pat.lesson ? lessonBySlug.get(pat.lesson) : undefined;
@@ -36,8 +39,8 @@ const diffColor: Record<string, string> = { E: 'diff-e', M: 'diff-m', H: 'diff-h
             <thead><tr><th></th><th>Problem</th><th>Sub-pattern</th><th>Diff</th><th>Trigger</th><th>Links</th></tr></thead>
             <tbody>
               {pat.problems.map((q) => (
-                <tr class={q.done ? 'row-done' : ''}>
-                  <td>{q.done ? '✅' : '⬜'}</td>
+                <tr class={q.done ? 'row-done' : ''} data-baked={q.done ? '1' : '0'} data-slug={q.lc}>
+                  <td><button class="solve-toggle" type="button" title={q.done ? 'Solved (synced)' : 'Click when solved'}>{q.done ? '✅' : '⬜'}</button></td>
                   <td class="pname">{q.name}{q.b75 && <span class="tag">B75</span>}{q.premium && <span class="tag prem">💎</span>}</td>
                   <td class="dim">{q.sub}</td>
                   <td><span class={diffColor[q.diff]}>{q.diff}</span></td>
@@ -84,4 +87,69 @@ const diffColor: Record<string, string> = { E: 'diff-e', M: 'diff-m', H: 'diff-h
   .diff-e { color: var(--green); font-family: var(--mono); }
   .diff-m { color: var(--accent); font-family: var(--mono); }
   .diff-h { color: var(--red); font-family: var(--mono); }
+  .solve-toggle { background: none; border: none; cursor: pointer; font-size: 1rem; padding: 0; }
+  tr[data-baked='1'] .solve-toggle { cursor: default; }
+  #copy-dsa-progress {
+    background: var(--bg-raised); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 0.25rem 0.7rem; font-size: 0.82rem; font-family: inherit; cursor: pointer;
+  }
+  #copy-dsa-progress:hover { border-color: var(--accent-dim); }
+  #copy-dsa-progress.copied { border-color: var(--green); color: var(--green); }
 </style>
+
+<script>
+  // Local solve overlay: baked flags come from src/dsa.ts (synced truth); clicks store
+  // NEW solves in localStorage until the buddy flips the baked flags, then they dedupe away.
+  const KEY = 'sdc-dsa-solves';
+  const local: string[] = JSON.parse(localStorage.getItem(KEY) || '[]');
+  const rows = [...document.querySelectorAll<HTMLTableRowElement>('tr[data-slug]')];
+
+  const paint = (row: HTMLTableRowElement) => {
+    const baked = row.dataset.baked === '1';
+    const slug = row.dataset.slug!;
+    const btn = row.querySelector('.solve-toggle')!;
+    if (baked) return; // synced solves are immutable here
+    const solved = local.includes(slug);
+    btn.textContent = solved ? '✅' : '⬜';
+    row.classList.toggle('row-done', solved);
+  };
+
+  rows.forEach((row) => {
+    paint(row);
+    const baked = row.dataset.baked === '1';
+    if (baked) {
+      // already synced — drop any stale local copy
+      const i = local.indexOf(row.dataset.slug!);
+      if (i >= 0) { local.splice(i, 1); localStorage.setItem(KEY, JSON.stringify(local)); }
+      return;
+    }
+    row.querySelector('.solve-toggle')!.addEventListener('click', () => {
+      const slug = row.dataset.slug!;
+      const i = local.indexOf(slug);
+      if (i >= 0) local.splice(i, 1); else local.push(slug);
+      localStorage.setItem(KEY, JSON.stringify(local));
+      paint(row);
+    });
+  });
+
+  const copyBtn = document.getElementById('copy-dsa-progress') as HTMLButtonElement | null;
+  copyBtn?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const bakedCount = rows.filter((r) => r.dataset.baked === '1').length;
+    const fresh = local.filter((s) => rows.some((r) => r.dataset.slug === s && r.dataset.baked === '0'));
+    const report = [
+      `⚔️ DSA progress report — ${new Date().toISOString().slice(0, 10)}`,
+      `Synced solves: ${bakedCount}/${rows.length}`,
+      `NEW solves to log (${fresh.length}): ${fresh.length ? fresh.join(', ') : 'none'}`,
+      `(paste to /interview-buddy → Notion roadmap + XP + baked flags all update)`,
+    ].join('\n');
+    try {
+      await navigator.clipboard.writeText(report);
+      copyBtn.classList.add('copied');
+      copyBtn.textContent = '✅ Copied';
+      setTimeout(() => { copyBtn.classList.remove('copied'); copyBtn.textContent = '📋 Copy progress'; }, 2500);
+    } catch {
+      window.prompt('Copy your DSA progress report:', report);
+    }
+  });
+</script>

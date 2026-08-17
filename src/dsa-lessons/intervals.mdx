@@ -1,0 +1,116 @@
+---
+title: 'Intervals'
+description: 'Sort, then sweep — merging, inserting, and scheduling overlapping ranges, plus the one overlap formula that answers everything.'
+order: 4
+minutes: 25
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## When this pattern fires
+
+Input is **ranges** — meetings, bookings, time periods `[start, end]` — and the question is about **overlap**: merge them, count rooms, remove conflicts, insert a new one. 
+
+**Move #1, always: sort by start time.** Unsorted intervals are chaos; sorted, every question becomes a single left-to-right sweep comparing each interval with a running "current" one. If you remember one thing: *sort, then sweep*.
+
+**The overlap test (memorize as a formula):** two intervals `a`, `b` overlap ⟺ `a.start <= b.end && b.start <= a.end`. After sorting by start, the practical check simplifies: `next.start <= current.end`.
+
+## Form 1 — Merge & Insert
+
+```java
+// Merge Intervals
+public int[][] merge(int[][] intervals) {
+    Arrays.sort(intervals, (a, b) -> Integer.compare(a[0], b[0]));
+    List<int[]> out = new ArrayList<>();
+    int[] cur = intervals[0];
+    for (int i = 1; i < intervals.length; i++) {
+        if (intervals[i][0] <= cur[1])                 // overlaps current →
+            cur[1] = Math.max(cur[1], intervals[i][1]); // extend (MAX, not replace!)
+        else {
+            out.add(cur);                               // gap → emit, start fresh
+            cur = intervals[i];
+        }
+    }
+    out.add(cur);                                       // don't forget the last one
+    return out.toArray(new int[0][]);
+}
+```
+
+Two bestiary-grade details: **`Math.max` when extending** — `[1,10], [2,3]`: the second interval is swallowed entirely; naively taking its end would *shrink* the merge. And **emit the final `cur`** after the loop — the classic forgotten line.
+
+**Insert Interval** (already-sorted input, no re-sort needed — say it): three phases — copy intervals ending before the new one; merge everything overlapping into the new one (`newStart = min`, `newEnd = max`); copy the rest.
+
+## Form 2 — Scheduling & Overlaps
+
+**Meeting Rooms I** — "can one person attend all?": sort, scan adjacent pairs, any `next.start < cur.end` → no. That's the whole problem.
+
+**Meeting Rooms II** — "minimum rooms": the real question is **maximum simultaneous overlap**. Two standard answers; know both, lead with events:
+
+<Mermaid code={`flowchart TD
+    A["meetings: [0,30] [5,10] [15,20]"] --> B["events: +1@0, +1@5, −1@10, +1@15, −1@20, −1@30"]
+    B --> C["sweep sorted events,\nrunning count: 1,2,1,2,1,0"]
+    C --> D["answer = max count = 2 rooms"]`} />
+
+1. **Event sweep**: split each meeting into `(start, +1)` and `(end, −1)`, sort all events, running sum, track the max. **Tie rule: ends before starts** at the same time (a room freed at 10 is usable by a meeting starting at 10).
+2. **Min-heap of end times**: sort meetings by start; for each, if the earliest-ending room (`heap.peek()`) is free (`<= start`) reuse it (pop), always push your end. Heap size at the end... no — **max heap size ever** is the answer; conveniently the heap only grows when needed, so final size works. This version previews the Heaps pattern.
+
+**Non-overlapping Intervals** — "min removals so none overlap": greedy — equivalent to *keeping* the maximum number of non-overlapping intervals. **Sort by END time**, greedily keep every interval that starts at-or-after the last kept end. Classic activity selection; the "sort by end, not start" switch is the whole insight — earliest-ending interval leaves the most room for the rest.
+
+## Recognition table
+
+| You see | Move |
+|---------|------|
+| "merge/combine overlapping ranges" | sort by start, sweep, extend with max |
+| "can attend all / any conflict?" | sort, check adjacent pairs |
+| "min rooms / max concurrent" | event sweep (+1/−1) or end-time min-heap |
+| "min removals to de-conflict" / "max non-overlapping" | sort by END, greedy keep |
+| "insert a range into sorted ranges" | 3-phase: before / merge / after |
+| calendar/booking flavored SD-ish wording | same tools — intervals hide inside Airbnb/Calendar questions |
+
+## Bug bestiary (pre-loaded)
+
+- **Extend with `next.end` instead of `Math.max(cur.end, next.end)`** — swallowed intervals shrink the merge (`[1,10],[2,3]`).
+- **Forgetting to emit the last `cur`** after the sweep.
+- **Tie-break wrong in event sweep** — starts processed before ends at equal time → phantom extra room.
+- **Sorting by start for the removal problem** — it's the END sort that makes the greedy correct.
+- **`<` vs `<=` on touching intervals** (`[1,2],[2,3]`) — read the problem's definition of overlap; say your assumption out loud.
+
+<Quiz questions={[
+  {
+    q: 'Merging sorted [[1,10],[2,3],[4,5]] — after processing [2,3], cur must be [1,10]. Which line guarantees it?',
+    options: [
+      'cur[1] = intervals[i][1]',
+      'cur[1] = Math.max(cur[1], intervals[i][1]) — [2,3] is fully swallowed; taking its end would shrink [1,10] to [1,3] and wrongly split off [4,5]',
+      'cur[0] = Math.min(cur[0], intervals[i][0])',
+      'Sorting by end time first'
+    ],
+    answer: 1,
+    why: 'The swallowed-interval case is THE merge bug. (Start never needs min — sorting by start guarantees cur[0] is already smallest.)'
+  },
+  {
+    q: 'Meeting Rooms II via event sweep: meeting ends at 10, another starts at 10. Processing order and why?',
+    options: [
+      'Start first — arrivals take priority',
+      'End (−1) first — the freed room is available to the 10:00 start; processing the start first counts a phantom simultaneous meeting and overstates rooms by 1',
+      'Order does not matter at equal times',
+      'Merge them into one event'
+    ],
+    answer: 1,
+    why: 'Tie-breaking is where event sweeps go wrong. Back-to-back meetings share a room; your sort comparator must encode that (end events before start events at equal time).'
+  },
+  {
+    q: '"Minimum intervals to remove so none overlap" — why sort by END time for the greedy?',
+    options: [
+      'End sort is faster to compute',
+      'Keeping the interval that ends earliest leaves maximum room for everything after it — each greedy keep is provably safe; sorting by start can trap you with a long interval that blocks many others',
+      'Start sort fails on negative times',
+      'Either sort works with the right bookkeeping'
+    ],
+    answer: 1,
+    why: 'Activity selection\'s exchange argument: earliest end dominates any alternative choice. The [1,100],[2,3],[4,5] counterexample kills start-sort greedy in one line — have it ready.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: **Merge Intervals** (code it, narrate the two bestiary traps) → **Meeting Rooms II** (both solutions, say the tie rule) → unseen transfer test from the scheduling family when warm. Note: Meeting Rooms I & II are 💎 premium — LintCode links on the Arsenal page.

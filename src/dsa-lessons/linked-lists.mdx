@@ -1,0 +1,152 @@
+---
+title: 'Linked Lists'
+description: 'Fast & slow, in-place reversal, and the dummy-head discipline — pointer surgery without losing limbs, in Java.'
+order: 5
+minutes: 35
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## When this pattern fires
+
+The input is a linked list (or an array secretly behaving like one — Find the Duplicate), and the ask involves **cycles, middles, ends, reversals, or splicing**. Arrays index; lists *point* — so every technique here is about moving pointers cleverly instead of counting.
+
+**Two tools you'll use in almost every problem:**
+- **Dummy head**: `ListNode dummy = new ListNode(0); dummy.next = head;` — makes "delete the head" and "insert before head" stop being special cases. When in doubt, dummy.
+- **Draw it.** Four boxes and arrows on paper before coding. Pointer bugs are invisible in code and obvious in a picture — this is your decomposition-under-pressure rep in miniature.
+
+## Form 1 — Fast & Slow (Tortoise & Hare)
+
+Two pointers, one moving 2×. Three distinct super-powers:
+
+**Middle** — when fast hits the end, slow is at the middle:
+```java
+ListNode slow = head, fast = head;
+while (fast != null && fast.next != null) { slow = slow.next; fast = fast.next.next; }
+// even length: slow = SECOND middle. Need first? start fast = head.next.
+```
+
+**Cycle detection** — in a cycle, fast laps slow; they must meet:
+```java
+while (fast != null && fast.next != null) {
+    slow = slow.next; fast = fast.next.next;
+    if (slow == fast) return true;      // compare NODES (==), never values
+}
+return false;
+```
+
+**Nth from end** (one pass): lead pointer goes n steps ahead, then both walk; when lead hits the end, trail is at target. With a dummy start for trail, trail lands *before* the node to delete — exactly where surgery needs you.
+
+**Find the Duplicate Number** — the transfer test: array values in 1..n treated as pointers (`i → nums[i]`) form a linked structure; a duplicate value = two arrows into one node = **a cycle**. Phase 1 find the meeting point, phase 2 reset one pointer to start, walk both at 1×, they meet at the cycle entrance (Floyd's). Recognizing "array as hidden linked list" cold is a Recognition Fear win waiting to happen.
+
+## Form 2 — In-Place Reversal (the three-pointer dance)
+
+```java
+// Reverse Linked List — THE fundamental. Muscle memory required.
+public ListNode reverse(ListNode head) {
+    ListNode prev = null, cur = head;
+    while (cur != null) {
+        ListNode next = cur.next;   // 1. save the rope before cutting it
+        cur.next = prev;            // 2. flip the arrow
+        prev = cur;                 // 3. advance prev
+        cur = next;                 // 4. advance cur
+    }
+    return prev;                    // prev is the new head (cur is null!)
+}
+```
+
+<Mermaid code={`flowchart LR
+    subgraph step["one iteration: save → flip → advance"]
+      P["prev"] -.-> A["1"]
+      A -->|"was →, now ←"| P2[" "]
+      C["cur"] -.-> B["2"]
+      B --> D["3 (next saved)"]
+    end`} />
+
+The four lines in that exact order. Line 1 before line 2 — cut the rope after grabbing the other side. Return `prev`, not `cur` (cur walked off the end).
+
+**Reverse Linked List II** (section m..n): dummy head → walk to the node *before* m → reverse n−m+1 nodes → **reconnect both seams** (section's old head now points to the node after n; the before-node points to the section's new head). The seams are where all the bugs live — draw them.
+
+**Reverse Nodes in k-Group** (Hard): count k ahead (don't reverse a short tail), reverse the group, recurse or iterate with the seam bookkeeping from II. It's II in a loop — nothing new, just discipline.
+
+## Form 3 — Composite & Structural
+
+**Reorder List** (L0→Ln→L1→Ln-1…) — the pattern showcase, three techniques chained: find middle (fast/slow) → reverse second half → **weave** the two halves. If you can narrate this cold, you own the pattern.
+
+**Merge Two Sorted Lists** — dummy head + tail pointer, splice the smaller node each step, attach the leftover list at the end (no leftover loop needed — it's already linked!).
+
+**Copy List with Random Pointer** — two answers: hashmap `old → clone` (two passes, O(n) space, say it first) or the interleave trick (clone woven between originals: `A→A'→B→B'`, random of clone = `orig.random.next`, then unweave — O(1) space, senior flex).
+
+**LRU Cache** — the structural boss: HashMap for O(1) lookup + doubly-linked list for O(1) recency ordering (move-to-front, evict-from-tail). Every operation: update map AND list together. In Java, mention `LinkedHashMap` exists — then build it manually anyway, because that's the actual test.
+
+## Recognition table
+
+| You see | Move |
+|---------|------|
+| "cycle? / loops forever?" | fast & slow, compare nodes |
+| "middle / nth from end, one pass" | fast & slow with offset |
+| "reverse (all / section / groups)" | three-pointer dance + dummy + seams |
+| "array, values 1..n, one duplicate, no modify" | hidden linked list → Floyd's |
+| "merge sorted lists" | dummy + splice |
+| "O(1) get and put with eviction" | HashMap + doubly-linked list |
+| "deep copy with weird pointers" | old→new map (or interleave) |
+
+## Bug bestiary (pre-loaded)
+
+- **Losing the rope**: writing `cur.next = prev` before saving `next` — rest of the list is gone.
+- **Returning `cur`** (null) instead of `prev` from a reversal.
+- **`fast.next.next` NPE** — the guard is `fast != null && fast.next != null`, in that order.
+- **Seam amnesia** in section reversals — reversed chunk floats disconnected; always reconnect both ends.
+- **Comparing values not nodes** in cycle detection — duplicate values false-positive.
+- **LRU: map updated, list not** (or vice versa) — the two structures drift; every op touches both.
+
+<Quiz questions={[
+  {
+    q: 'In the reversal loop, why must `ListNode next = cur.next` come before `cur.next = prev`?',
+    options: [
+      'Java evaluation order requires it',
+      'Flipping the arrow first destroys the only reference to the rest of the list — next saves the rope before you cut it; without it the remaining nodes are unreachable',
+      'It avoids a NullPointerException',
+      'Purely stylistic'
+    ],
+    answer: 1,
+    why: 'The single most common linked-list bug. "Save the rope before cutting" — that mental phrase is the fix.'
+  },
+  {
+    q: 'Find the Duplicate: array [1,3,4,2,2], no modification, O(1) space. Why is this a linked-list problem?',
+    options: [
+      'Arrays are linked lists internally',
+      'Treat i → nums[i] as pointers: values 1..n over n+1 slots guarantee two arrows into one node — a cycle whose ENTRANCE is the duplicate. Floyd\'s two-phase finds it',
+      'Sort it with pointer swaps',
+      'It is not — use a HashSet'
+    ],
+    answer: 1,
+    why: 'The hidden-structure transfer: constraints (values 1..n, read-only, O(1) space) eliminate hashing/sorting and point at Floyd\'s. Constraint-scan → pattern is the Alien Protocol working as designed.'
+  },
+  {
+    q: 'LRU Cache: why a doubly-linked list specifically, not singly?',
+    options: [
+      'Doubly is faster to traverse',
+      'get() must move an arbitrary middle node to the front in O(1) — removal needs instant access to the node\'s PREDECESSOR, which only a prev pointer gives you',
+      'Singly lists cannot store key-value pairs',
+      'To iterate the cache in both orders'
+    ],
+    answer: 1,
+    why: 'O(1) removal of a known node = need node.prev. Singly-linked forces an O(n) predecessor hunt, killing the whole contract. This "why doubly" follow-up is asked nearly every time.'
+  },
+  {
+    q: 'Reorder List (L0→Ln→L1→Ln-1…) — the plan, cold:',
+    options: [
+      'Store nodes in an ArrayList, rebuild by index',
+      'Fast/slow to find middle → reverse the second half → weave the halves alternately — three list techniques chained, O(1) space',
+      'Recursively swap ends inward',
+      'Priority queue by original index'
+    ],
+    answer: 1,
+    why: 'Option 1 works but costs O(n) space and reads as pattern-blindness. The chain (middle + reverse + weave) is why this problem exists — it audits all three sub-skills at once.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: **Reverse Linked List until boring** (target: 3 clean closed-book reps) → **Middle + Cycle** same session (fast/slow twins) → then the composite audit: **Reorder List**. LRU Cache gets its own session — it's a mini system design.

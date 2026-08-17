@@ -1,0 +1,150 @@
+---
+title: 'Heaps / Priority Queue'
+description: 'Top-K with the counterintuitive heap choice, two-heaps for streaming medians, and K-way merge — PriorityQueue mastery in Java.'
+order: 8
+minutes: 30
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## When this pattern fires
+
+You need **repeated access to the min or max of a changing collection**: "Kth largest", "top K frequent", "merge K sorted", "running median", "schedule the highest-priority next". Sorting gives order once; a heap gives you the extreme *continuously* as elements come and go — insert and extract in O(log n), peek in O(1).
+
+Java: `PriorityQueue<T>` is a **min-heap** by default. Max-heap = reversed comparator. Know the three spellings cold:
+
+```java
+PriorityQueue<Integer> min = new PriorityQueue<>();
+PriorityQueue<Integer> max = new PriorityQueue<>(Comparator.reverseOrder());
+PriorityQueue<int[]> byField = new PriorityQueue<>((a, b) -> a[1] - b[1]); // careful: overflow-safe → Integer.compare(a[1], b[1])
+```
+
+## Form 1 — Top-K (the counterintuitive choice)
+
+**Kth LARGEST → keep a MIN-heap of size k.** Backwards-feeling, and the exact thing interviewers probe:
+
+```java
+// Kth Largest Element
+public int findKthLargest(int[] nums, int k) {
+    PriorityQueue<Integer> heap = new PriorityQueue<>();   // MIN-heap!
+    for (int x : nums) {
+        heap.offer(x);
+        if (heap.size() > k) heap.poll();   // evict the smallest of the k
+    }
+    return heap.peek();   // smallest of the k largest = the kth largest
+}
+```
+
+<Mermaid code={`flowchart LR
+    A["stream: 3 2 1 5 6 4, k=2"] --> B["min-heap holds the\n2 largest so far:\n{3,2}→{3,2}? no: {2,3}→{3,5}→{5,6}"]
+    B --> C["peek = 5 = 2nd largest\nroot guards the door:\nbeat the smallest of the elite\nor you don't get in"]`} />
+
+The logic: the heap holds the k best; the **root is the weakest of the elite** — the door guard. A newcomer either beats the guard (guard evicted) or is rejected. O(n log k) time, **O(k) space** — the space bound is why this beats sorting, and why it works on **streams** (say that word; it upgrades the answer).
+
+**Top K Frequent**: count with a HashMap, then same size-k min-heap ordered by frequency. (Mention bucket-sort-by-frequency exists for true O(n) — then use the heap anyway unless pushed.) **K Closest Points**: size-k MAX-heap by distance — flip everything: to keep the k smallest, the guard is the *largest* of the elite. Deriving the flip yourself, out loud, is the rep.
+
+## Form 2 — Two Heaps (streaming median)
+
+**Find Median from Data Stream**: split all numbers into a **max-heap `low`** (smaller half — its root is the largest small) and a **min-heap `high`** (larger half — its root is the smallest large). The median lives at the roots.
+
+```java
+PriorityQueue<Integer> low = new PriorityQueue<>(Comparator.reverseOrder());
+PriorityQueue<Integer> high = new PriorityQueue<>();
+
+void addNum(int num) {
+    low.offer(num);                 // 1. always enter through low
+    high.offer(low.poll());         // 2. push low's best up — order restored
+    if (high.size() > low.size())   // 3. rebalance: low holds equal or one extra
+        low.offer(high.poll());
+}
+double findMedian() {
+    return low.size() > high.size() ? low.peek()
+         : (low.peek() + high.peek()) / 2.0;
+}
+```
+
+The add-then-rebalance dance (through low, top to high, rebalance back) maintains both invariants — **every low ≤ every high** and **sizes within 1** — without any case analysis. Memorize the dance; deriving it live is fumble-prone. (Sliding Window Median adds lazy deletion on top — flag it as the Hard extension, fight it later.)
+
+## Form 3 — K-Way Merge
+
+**Merge K Sorted Lists**: min-heap of the k current heads; pop the smallest, append it, push its successor:
+
+```java
+public ListNode mergeKLists(ListNode[] lists) {
+    PriorityQueue<ListNode> heap = new PriorityQueue<>((a, b) -> Integer.compare(a.val, b.val));
+    for (ListNode h : lists) if (h != null) heap.offer(h);
+    ListNode dummy = new ListNode(0), tail = dummy;
+    while (!heap.isEmpty()) {
+        ListNode n = heap.poll();
+        tail.next = n; tail = n;
+        if (n.next != null) heap.offer(n.next);
+    }
+    return dummy.next;
+}
+```
+
+N total nodes, k lists → **O(N log k)** — the heap never holds more than k. (Alternative: divide-and-conquer pairwise merging, same complexity — name it, pick one.) This shape is also the SD wing's multi-way merge: sharded query results, log merging — same machinery, say the connection.
+
+## Form 4 — Simulation / Scheduling
+
+**Task Scheduler**: always run the most-frequent remaining task → max-heap by count, with a cooldown queue of (task, ready-time) re-entering the heap when eligible. (The pure-math slot formula also exists; the heap version generalizes and is easier to defend.) This is greedy + heap — the heap is just "give me the best current choice" machinery, previewing the Greedy pattern.
+
+## Recognition table
+
+| You see | Move |
+|---------|------|
+| "Kth largest / top K / K closest" | size-k heap of the OPPOSITE kind (min-heap for largest) |
+| "…from a stream / can't hold all data" | same — the O(k) space is the point |
+| "running median" | two heaps, add-then-rebalance dance |
+| "merge K sorted anything" | min-heap of k heads, O(N log k) |
+| "always process highest priority / most frequent next" | heap + simulation loop |
+| "kth smallest in sorted matrix" | k-way merge in disguise (rows = lists) |
+
+## Bug bestiary (pre-loaded)
+
+- **Max-heap for Kth largest** — holds all n elements (O(n) space) and polls k times; works, but misses the entire size-k insight and fails the "what if it's a stream?" follow-up.
+- **`(a, b) -> a - b` comparator overflow** on values near ±2³¹ — `Integer.compare` on reflex.
+- **Two heaps: adding directly to the "correct" side** — case analysis breeds bugs; the through-low dance handles everything.
+- **Rebalance threshold `>=` vs `>`** — sizes may differ by exactly 1 (low's extra); over-eager rebalancing oscillates.
+- **K-way merge: pushing null successors** — guard `n.next != null`.
+- **Java PQ iteration is NOT sorted order** — only poll() drains in order; iterating/toString for debugging lies to you.
+
+<Quiz questions={[
+  {
+    q: 'Kth largest from a stream of millions of numbers. Why a MIN-heap of size k?',
+    options: [
+      'Min-heaps are faster than max-heaps',
+      'The heap holds the k largest seen; its root is the SMALLEST of those — the door guard. Newcomers beat the guard or bounce. O(k) memory works on unbounded streams; a max-heap of everything is O(n) and dies there',
+      'Max-heaps cannot be size-limited',
+      'To return results in ascending order'
+    ],
+    answer: 1,
+    why: 'The guard-at-the-door model derives the counterintuitive choice instead of memorizing it — and the stream framing is exactly where an interviewer takes this next.'
+  },
+  {
+    q: 'Two-heaps median: why does every addNum go THROUGH low (offer to low, poll to high, maybe rebalance)?',
+    options: [
+      'low is the max-heap so it is faster',
+      'The dance re-establishes both invariants (all low ≤ all high; sizes within 1) mechanically, with zero case analysis — direct placement requires comparing against both roots and handling empty-heap edges, the classic fumble zone',
+      'Numbers must be processed in sorted order',
+      'It halves the number of comparisons'
+    ],
+    answer: 1,
+    why: 'Both approaches can be correct; the dance is the one you won\'t fumble under interview pressure. Choosing the fumble-proof form IS the senior move.'
+  },
+  {
+    q: 'Merge K sorted lists, N total nodes. Why is the heap version O(N log k) and not O(N log N)?',
+    options: [
+      'log k and log N are asymptotically equal',
+      'The heap only ever contains at most k elements (one head per list) — each of the N nodes passes through one offer and one poll costing O(log k)',
+      'Linked lists make heap operations O(1)',
+      'It is O(N log N) — the claim is wrong'
+    ],
+    answer: 1,
+    why: 'The bound comes from heap SIZE, not total data. Same reason top-K is O(n log k) — spotting "the heap stays small" across both is the pattern-level insight.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: **Kth Largest + Top K Frequent** one session (guard-at-the-door narrated twice, second time flipped for K Closest) → **Merge K Sorted Lists** (bridges back to linked lists) → **Find Median from Data Stream** (the dance, closed-book). That completes patterns 1–8 — Act I's entire DSA surface has lessons behind it.

@@ -1,0 +1,135 @@
+---
+title: 'Prefix Sum'
+description: 'Precompute running totals so any range collapses to one subtraction — plus the prefix+hashmap trick that cracks "count subarrays summing to K".'
+order: 3
+minutes: 25
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## When this pattern fires
+
+You're asked about **sums (or products/counts) over ranges or subarrays**, more than once: "sum of elements between i and j, many queries", "how many subarrays sum to K", "index where left sum equals right sum". Brute force re-adds the same elements over and over — the repeated work IS the signal.
+
+**The idea:** precompute `prefix[i]` = sum of everything before index i. Then any range is one subtraction:
+
+```
+sum(i..j) = prefix[j+1] - prefix[i]
+```
+
+<Mermaid code={`flowchart LR
+    A["nums: [3, 1, 4, 1, 5]"] --> B["prefix: [0, 3, 4, 8, 9, 14]"]
+    B --> C["sum(1..3) = prefix[4] - prefix[1]\n= 9 - 3 = 6  (1+4+1 ✓)"]`} />
+
+**Convention that saves you off-by-ones:** make `prefix` length n+1 with `prefix[0] = 0`. Every range query works uniformly — no special case for ranges starting at 0.
+
+## Form 1 — Standard 1D
+
+```java
+// Range Sum Query — Immutable: build once O(n), answer each query O(1)
+class NumArray {
+    private final int[] prefix;
+    public NumArray(int[] nums) {
+        prefix = new int[nums.length + 1];
+        for (int i = 0; i < nums.length; i++)
+            prefix[i + 1] = prefix[i] + nums[i];
+    }
+    public int sumRange(int left, int right) {
+        return prefix[right + 1] - prefix[left];
+    }
+}
+```
+
+**Find Pivot Index** — no array even needed: total sum once, then walk with a running `leftSum`; pivot when `leftSum == total - leftSum - nums[i]`.
+
+**Product of Array Except Self** — prefix thinking without sums: answer[i] = (product of everything left of i) × (product of everything right of i). Two passes, second one runs a running suffix product right-to-left directly into the answer array → O(1) extra space. The "no division" constraint is the trigger screaming *prefix decomposition*.
+
+## Form 2 — Prefix + HashMap (the interview favorite)
+
+"**Count subarrays summing exactly to K**" — sliding window FAILS here (negatives break the shrink logic: growing the window doesn't monotonically grow the sum). The trick:
+
+A subarray (i..j) sums to K ⟺ `prefix[j+1] - prefix[i] = K` ⟺ `prefix[i] = prefix[j+1] - K`.
+
+So walk left to right maintaining the running prefix, and ask a hashmap: *"how many earlier prefixes equal (current − K)?"* Each match = one subarray ending here.
+
+```java
+// Subarray Sum Equals K
+public int subarraySum(int[] nums, int k) {
+    Map<Integer, Integer> seen = new HashMap<>();
+    seen.put(0, 1);                    // empty prefix — subarrays starting at index 0
+    int prefix = 0, count = 0;
+    for (int x : nums) {
+        prefix += x;
+        count += seen.getOrDefault(prefix - k, 0);
+        seen.merge(prefix, 1, Integer::sum);   // add AFTER counting (no self-match)
+    }
+    return count;
+}
+```
+
+Two details interviewers watch for:
+
+1. **`seen.put(0, 1)` seed** — without it, subarrays that start at index 0 are never counted. The most common bug in this problem, period.
+2. **Count before inserting** the current prefix — else a zero-K query matches itself.
+
+**Continuous Subarray Sum** (multiple of K): same skeleton, store `prefix % k` instead of prefix, and store **first index** per remainder (need length ≥ 2, so compare indices). Same remainder seen twice = the between-chunk sums to a multiple of k.
+
+## Recognition table
+
+| You see | Move |
+|---------|------|
+| "many range-sum queries" | build prefix array, O(1) per query |
+| "count subarrays with sum exactly/K-ish" (negatives possible) | prefix + hashmap of seen prefixes |
+| "sum divisible by K" | hashmap of prefix **remainders** |
+| "left sum equals right sum" | running leftSum vs total |
+| "product except self, no division" | prefix × suffix products |
+| "longest subarray with equal 0s and 1s" | map 0→−1, then prefix+hashmap (first-index variant) |
+
+**Boundary with sliding window:** all-positive + "shortest/longest run meeting threshold" → window. Negatives present, or "count exact" → prefix+hashmap. Say which and why — that one sentence is a recognition rep.
+
+## Bug bestiary (pre-loaded — earn your own)
+
+- **Missing `put(0,1)` seed** → subarrays starting at index 0 silently dropped.
+- **Insert before count** → K=0 self-matches inflate the answer.
+- **Length-n prefix array** (no leading 0) → special-casing ranges from index 0, off-by-ones everywhere. Always n+1.
+- **Int overflow** on long arrays of big values — prefix in `long`.
+
+<Quiz questions={[
+  {
+    q: '"Count subarrays summing to K" with negative numbers present. Why not sliding window?',
+    options: [
+      'Windows cannot count, only measure length',
+      'With negatives, extending the window does not monotonically change the sum — the shrink/grow logic has no valid direction. Prefix + hashmap counts all matches in one pass instead',
+      'Sliding window is O(n²) here',
+      'It works — window is fine'
+    ],
+    answer: 1,
+    why: 'Window logic needs monotonicity (grow → sum up, shrink → sum down). Negatives kill it. This boundary IS the interview question half the time.'
+  },
+  {
+    q: 'In subarraySum, what breaks without seen.put(0, 1)?',
+    options: [
+      'Nothing — it is an optimization',
+      'Subarrays that START at index 0 are never counted: their match requires an "empty prefix" of value 0 to exist in the map',
+      'The map throws on missing keys',
+      'Negative K values fail'
+    ],
+    answer: 1,
+    why: 'prefix[j+1] − K = 0 means the subarray from the very start sums to K — the map must contain that empty prefix. THE classic bug of this pattern.'
+  },
+  {
+    q: 'Product of Array Except Self, no division, O(1) extra space. The move?',
+    options: [
+      'Compute total product, divide by nums[i] handling zeros specially',
+      'answer[i] = prefix product from the left × suffix product from the right — left pass writes prefixes into answer, right pass multiplies a running suffix in',
+      'Sort and use two pointers',
+      'Nested loops with early exit'
+    ],
+    answer: 1,
+    why: 'The constraint ("no division") is the pattern flag: decompose "everything except i" into left-of-i × right-of-i. Division (option 1) is explicitly banned AND zero-poisoned.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: **Range Sum Query** (5 min warm-up) → **Subarray Sum Equals K** (the boss — narrate the seed and insert-order out loud) → then the unseen transfer test when you're warm: an equal-0s-and-1s style disguise.
