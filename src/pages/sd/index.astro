@@ -21,6 +21,7 @@ const orderedIds = lessons.map((l) => l.id);
     <div class="progress-wrap">
       <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
       <span class="progress-label" id="progress-label">0 / {lessons.length} lessons</span>
+      <button id="copy-progress" type="button" title="Copy progress report to paste to the buddy">📋 Copy progress</button>
     </div>
   </header>
 
@@ -76,6 +77,13 @@ const orderedIds = lessons.map((l) => l.id);
     border-radius: 99px; transition: width 0.5s ease;
   }
   .progress-label { font-size: 0.82rem; color: var(--text-dim); font-family: var(--mono); white-space: nowrap; }
+  #copy-progress {
+    background: var(--bg-raised); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 0.35rem 0.8rem; font-size: 0.8rem; font-family: inherit;
+    cursor: pointer; white-space: nowrap;
+  }
+  #copy-progress:hover { border-color: var(--accent-dim); }
+  #copy-progress.copied { border-color: var(--green); color: var(--green); }
   .module { margin-top: 2.4rem; }
   .module-title { border: none; margin-bottom: 0.2rem; }
   .module-tagline { color: var(--text-dim); font-size: 0.92rem; margin-top: 0; }
@@ -124,4 +132,30 @@ const orderedIds = lessons.map((l) => l.id);
   const doneCount = cards.filter((c) => done.includes(c.dataset.lessonId!)).length;
   if (fill && total > 0) fill.style.width = `${(doneCount / total) * 100}%`;
   if (label) label.textContent = `${doneCount} / ${total} lessons`;
+
+  // Copy-progress: structured report to paste to the buddy, who logs it to Notion + repo.
+  const copyBtn = document.getElementById('copy-progress') as HTMLButtonElement | null;
+  copyBtn?.addEventListener('click', async () => {
+    const cleared = cards.filter((c) => done.includes(c.dataset.lessonId!));
+    const clearedIds = cleared.map((c) => c.dataset.lessonId);
+    const nextCard = cards.find((c) => !done.includes(c.dataset.lessonId!));
+    const report = [
+      `🏰 Citadel progress report — ${new Date().toISOString().slice(0, 10)}`,
+      `SD lessons cleared (${doneCount}/${total}): ${clearedIds.length ? clearedIds.join(', ') : 'none yet'}`,
+      `Next up: ${nextCard ? nextCard.dataset.lessonId : 'all lessons cleared'}`,
+      `(paste this to /interview-buddy to sync Notion + the forge queue)`,
+    ].join('\n');
+    try {
+      await navigator.clipboard.writeText(report);
+      copyBtn.classList.add('copied');
+      copyBtn.textContent = '✅ Copied — paste to buddy';
+      setTimeout(() => {
+        copyBtn.classList.remove('copied');
+        copyBtn.textContent = '📋 Copy progress';
+      }, 2500);
+    } catch {
+      // Clipboard API blocked (rare) — show the report so it can be copied manually
+      window.prompt('Copy your progress report:', report);
+    }
+  });
 </script>
