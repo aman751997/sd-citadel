@@ -1,0 +1,78 @@
+---
+import Base from '../layouts/Base.astro';
+import { BANK, PAPERS } from '../bank';
+
+const stars = (n: number) => '★'.repeat(n) + '☆'.repeat(3 - n);
+const total = BANK.reduce((s, t) => s + t.questions.length, 0);
+---
+<Base title="Question Bank" description="Every SD question type, mapped to the lesson that covers it">
+  <h1>🎯 The Question Bank</h1>
+  <p class="lede">
+    {total} questions — the full landscape of what SD rounds ask (web-validated 2026, mirrored from the Notion Master Sheet).
+    Every question maps to the lesson(s) that teach its patterns: learn ~20 lessons, cover all {total}.
+    🔥 most-asked · ✨ AI-era · any row = a valid 45-min mock with the buddy.
+  </p>
+
+  {BANK.map((tier) => (
+    <section class="tier">
+      <h2>{tier.title}</h2>
+      <p class="blurb">{tier.blurb}</p>
+      <div class="qtable-wrap">
+        <table class="qtable">
+          <thead>
+            <tr><th>Question</th><th>Diff</th><th>Freq</th><th>Core patterns</th><th>Covered by</th></tr>
+          </thead>
+          <tbody>
+            {tier.questions.map((q) => (
+              <tr>
+                <td class="qname">
+                  {q.hot && '🔥 '}{q.ai && '✨ '}{q.name}
+                  {q.walkthrough === 'forged' && <span class="badge forged">walkthrough ✓</span>}
+                  {q.walkthrough === 'queued' && <span class="badge queued">walkthrough queued</span>}
+                </td>
+                <td class="mono">{q.diff}</td>
+                <td class="mono freq">{stars(q.freq)}</td>
+                <td class="dim">{q.patterns}</td>
+                <td class="dim covers">{q.covers}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  ))}
+
+  <blockquote><p>{PAPERS}</p></blockquote>
+
+  <h2>How to use this page</h2>
+  <ol>
+    <li>Don't grind this list top to bottom — grind the <a href={import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : import.meta.env.BASE_URL + '/'}>roadmap lessons</a>; they're built to cover every row here.</li>
+    <li>Before an interview at company X: scan the tiers, pick the 2–3 rows they're known to ask, mock those with the buddy.</li>
+    <li>A row with no walkthrough is still fair game for a mock — its "covered by" lessons are the prep.</li>
+  </ol>
+</Base>
+
+<style>
+  .lede { color: var(--text-dim); }
+  .tier { margin-top: 2rem; }
+  .blurb { color: var(--text-dim); font-size: 0.9rem; margin-top: -0.4rem; }
+  .qtable-wrap { overflow-x: auto; }
+  .qtable { font-size: 0.85rem; min-width: 700px; }
+  .qname { font-weight: 600; white-space: nowrap; }
+  .mono { font-family: var(--mono); white-space: nowrap; }
+  .freq { color: var(--accent); }
+  .dim { color: var(--text-dim); }
+  .covers { font-size: 0.8rem; }
+  .badge {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    border-radius: 99px;
+    padding: 0.05rem 0.5rem;
+    margin-left: 0.45rem;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  .badge.forged { background: rgba(63, 185, 80, 0.15); color: var(--green); border: 1px solid var(--green); }
+  .badge.queued { background: rgba(88, 166, 255, 0.12); color: var(--blue); border: 1px solid var(--blue); }
+</style>
