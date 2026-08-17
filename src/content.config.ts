@@ -12,4 +12,14 @@ const lessons = defineCollection({
   }),
 });
 
-export const collections = { lessons };
+const dsa = defineCollection({
+  loader: glob({ pattern: '**/*.mdx', base: './src/dsa-lessons' }),
+  schema: z.object({
+    title: z.string(),
+    description: z.string(),
+    order: z.number(),
+    minutes: z.number(),
+  }),
+});
+
+export const collections = { lessons, dsa };

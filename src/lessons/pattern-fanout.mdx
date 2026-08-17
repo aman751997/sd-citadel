@@ -1,0 +1,102 @@
+---
+title: 'Pattern: Fan-out — Push vs Pull Feeds'
+description: 'One write, many readers — the feed problem, the celebrity problem, and the hybrid answer that every social design lands on.'
+module: 5
+order: 1
+minutes: 30
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The pattern in one sentence
+
+One user's action must appear to many users (followers, subscribers, channel members) — and you must choose **when** the expensive many-copies work happens: at write time (push), at read time (pull), or split by who's writing (hybrid).
+
+**Trigger words:** "feed", "timeline", "followers see", "subscribers", "notify all members", "home page shows posts from people you follow".
+
+## The two pure strategies
+
+**Pull (fan-out on read):** store each post once, by author. Building Alice's feed = fetch recent posts from all 800 people she follows, merge, rank, return.
+
+**Push (fan-out on write):** every user has a materialized **feed cache** (Redis list/sorted set of post IDs). When Bob posts, a fan-out worker inserts the post ID into every follower's feed. Reading a feed = one cache read.
+
+<Mermaid code={`flowchart TD
+    subgraph PUSH["Push — pay at write"]
+      BP["Bob posts"] --> FW["fan-out workers"] --> F1["Alice's feed cache"]
+      FW --> F2["Carol's feed cache"]
+      FW --> F3["...every follower"]
+      AR["Alice reads"] -->|"one cheap read"| F1
+    end
+    subgraph PULL["Pull — pay at read"]
+      BP2["Bob posts"] -->|"stored once"| DB[(posts by author)]
+      AR2["Alice reads"] -->|"query 800 followees,\nmerge, rank"| DB
+    end`} />
+
+| | Push | Pull |
+|--|------|------|
+| Read cost | O(1) — the product wants this; feeds are read 100:1 | O(followees) per read — expensive, slow |
+| Write cost | O(followers) per post | O(1) |
+| Killer case | **celebrity posts** → 100M feed inserts for one tweet | **heavy reader** following thousands |
+| Staleness | feed materializes seconds after post (async workers) | always fresh |
+
+## The celebrity problem and the hybrid answer
+
+Push dies at celebrities: one Ronaldo post = 600M writes, and the fan-out storm delays everyone else's posts behind it. Pull dies at read volume. So every real system converges on **hybrid**:
+
+- **Normal users (99.9%): push.** Their follower counts are small; write fan-out is cheap; reads stay O(1).
+- **Celebrities (past a threshold, say 100K followers): pull.** Their posts are stored once. At read time: fetch feed cache (pushed part) + fetch recent posts from the few celebrities you follow (pulled part) + **merge and rank**.
+
+Alice follows 799 normies + Ronaldo → her read = 1 cache read + 1 celebrity lookup + merge. This exact paragraph, with a threshold number said out loud, is the expected answer to the most-asked scale question in SD interviews (Twitter/Instagram feed).
+
+Implementation notes that earn depth: fan-out runs **async via queues** (post write returns instantly; feed inserts are the queues lesson's exact diagram — key by follower ID for parallelism); feed caches hold **IDs only, not content** (hydrate post content from a post cache at read — dedups storage, edits propagate free); cap feed length (~800 entries — beyond page 3 nobody scrolls; fall back to pull for archaeology); a new user with an empty feed cache gets a one-time pull build.
+
+## Questions this pattern unlocks
+
+| Bank question | How the pattern applies |
+|---------------|------------------------|
+| **Twitter / News feed** (walkthrough next) | the pattern verbatim — hybrid + ranking |
+| **Instagram** | same + media via blob/CDN lesson; feed = IDs, images = CDN |
+| **Notification system** | fan-out to devices instead of feeds; add per-channel workers (push/email/SMS), priorities, retry+DLQ |
+| **TikTok / recommendations feed** | pull, but candidates come from a ranker, not a follow graph — meets AI-era recsys lesson |
+| **Discord huge channels** | push to online members only (registry from realtime lesson), lazy for offline |
+| **Live comments** | fan-out to current viewers of a stream = pub/sub push, no persistence per viewer |
+
+<Quiz questions={[
+  {
+    q: 'Feeds are read 100× more than written. Which strategy does that ratio favor, and why?',
+    options: [
+      'Pull — fresh data for all those reads',
+      'Push — do the expensive fan-out once at write time so each of the 100 reads is a single cache fetch; optimize for the frequent operation',
+      'Neither — the ratio is irrelevant to the choice',
+      'Pull with a big cache in front'
+    ],
+    answer: 1,
+    why: 'Move work to the rare side of the ratio. This is the same precompute trade as typeahead\'s top-K — recognizing it as one recurring move across problems is the pattern skill itself.'
+  },
+  {
+    q: 'Your push-based feed is live and Cristiano Ronaldo (600M followers) joins. What breaks, and what is the fix?',
+    options: [
+      'Nothing — queues absorb it',
+      'His每 post triggers 600M feed inserts, hogging workers for hours and delaying all other fan-outs. Fix: hybrid — flag accounts over ~100K followers as pull-at-read; merge pushed feed + pulled celebrity posts',
+      'His reads get slow — add read replicas',
+      'Storage explodes — store one copy per post'
+    ],
+    answer: 1,
+    why: 'The celebrity problem = write amplification, not reads or storage. The hybrid with a stated threshold IS the interview answer; "queues absorb it" just moves the multi-hour backlog into the queue.'
+  },
+  {
+    q: 'Why do feed caches store post IDs rather than full post content?',
+    options: [
+      'IDs are needed for pagination',
+      'Redis cannot store large values',
+      'Content duplicated into millions of feeds wastes memory AND makes edits/deletes nearly impossible; IDs + a shared post cache hydrated at read solves both',
+      'To keep feeds encrypted'
+    ],
+    answer: 2,
+    why: 'Normalization inside a cache: the fan-out copies the cheap reference, content stays in one place. A deleted post = drop from one post cache, every feed heals automatically.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: 10 minutes — extend the hybrid feed with ranking ("chronological → engagement-ranked: what changes?") and answer live: where does ranking run, what gets precomputed, what does the celebrity merge look like now? Then weekend mock: **Twitter feed**, full 45.

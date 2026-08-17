@@ -1,0 +1,99 @@
+---
+title: 'AI-Era: Recommendation Systems (Two-Tower)'
+description: 'Candidate generation → ranking — the two-stage funnel behind every feed, and just enough ML systems design to be dangerous.'
+module: 12
+order: 5
+minutes: 25
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The framing that makes this an SD question
+
+"Design TikTok's feed / Netflix recommendations" is not an ML modeling interview — it's a **systems** question about serving personalized rankings over millions of items in ~200 ms. The models are boxes with latency and freshness properties. Get the funnel right and you pass; derive loss functions and you've answered the wrong question.
+
+## The two-stage funnel (the answer's skeleton)
+
+You cannot score 100M items per request. Every real system funnels:
+
+<Mermaid code={`flowchart LR
+    CORPUS["100M items"] --> CG["Stage 1 — candidate generation\ncheap, recall-oriented\n~few ms → 1,000 candidates"]
+    CG --> RK["Stage 2 — ranking\nexpensive model, precision\n~50-100ms → ordered top 50"]
+    RK --> BIZ["business layer:\ndedupe seen, diversity,\nfreshness boosts, policy"]
+    BIZ --> FEED["response"]`} />
+
+Say the shape first, then fill stages. **Stage 1 optimizes recall cheaply** ("don't miss anything plausibly good"), **Stage 2 spends compute on precision** over a small set. The business layer after both is where product rules live (no 10 videos from the same creator, boost fresh content, policy filters) — mentioning it separates people who've shipped feeds from people who've read papers.
+
+## Two-tower — how candidate generation works
+
+The bank names it, so know it properly: two neural nets — a **user tower** (history, demographics → user vector) and an **item tower** (content, stats → item vector) — trained so that engagement ≈ dot-product similarity. The serving trick that makes it a systems answer:
+
+- **Item vectors precompute offline** (items change slowly) → loaded into an **ANN index** — literally the same HNSW machinery as the RAG lesson.
+- **User vector computes at request time** (one cheap forward pass — it must reflect what you did 5 minutes ago).
+- Candidate generation = ANN lookup: "1,000 nearest items to this user vector, in milliseconds."
+
+One architecture sentence connects three lessons: *"candidate gen is an ANN search over precomputed item embeddings — the vector-search infrastructure from RAG, reused."* Multiple sources feed candidates in practice (two-tower + followed-creators + trending from the time-series pattern) — union them, let the ranker sort it out.
+
+## The feature store — the infra piece interviewers probe
+
+The ranker wants features: user's 7-day category clicks, item's 1-hour engagement rate, user×item history. The **feature store** serves them with two paths (and one trap):
+
+- **Batch path**: heavy aggregates computed offline (Spark, daily) → pushed to a low-latency KV store (Redis/Dynamo) for serving.
+- **Streaming path**: real-time counters (item's last-hour CTR) via the time-series pattern's aggregators.
+- **The trap — training/serving skew**: if training computes "7-day clicks" one way and serving another, the model silently underperforms. The feature store's whole reason to exist is *one definition, both consumers*. Name the skew; it's the senior detail.
+
+Freshness ladder to recite: ranking model retrains daily-ish · item embeddings hours · streaming features seconds-minutes · user vector per-request. Matching each component to its natural freshness *is* the design.
+
+## Closing the loop
+
+Impressions and engagements flow back (event stream → the ad-aggregator pipeline) into training data and streaming features. Two one-sentence flags that earn credit: **feedback loops** (recommend clicks → clicks train recommendations → filter bubble; countered with exploration ε and diversity rules) and **cold start** (new user: onboarding interests + popularity prior; new item: content-based embedding until engagement accrues).
+
+## Questions this unlocks
+
+| Bank question | How it applies |
+|---------------|----------------|
+| **Recommendation system / two-tower** | this lesson |
+| **TikTok** | this + video pipeline (async-jobs) + CDN (blob lesson) |
+| **News feed ranking** | fan-out pattern builds the candidate pool; this ranks it |
+| **"Personalize X"** (search, notifications, ads) | the funnel + feature store transfer wholesale |
+| **Ad serving** | same funnel + auction in the business layer |
+
+<Quiz questions={[
+  {
+    q: 'Why two stages instead of ranking all 100M items with the good model?',
+    options: [
+      'Two models are more accurate than one',
+      'The ranker costs ~ms per item — 100M × ms is hours per request. Cheap recall-oriented retrieval cuts 100M → 1K so expensive precision is spent where it matters',
+      'Regulatory separation of retrieval and ranking',
+      'The item corpus doesn\'t fit in one model'
+    ],
+    answer: 1,
+    why: 'The funnel is compute economics, the same shape as "filter cheap, then expensive" everywhere (Bloom → disk, ANN → rerank in RAG). Recognize it as the recurring move.'
+  },
+  {
+    q: 'Which is precomputed vs computed per-request in two-tower serving, and why?',
+    options: [
+      'Both towers precompute nightly',
+      'Item vectors precompute into an ANN index (items change slowly, there are 100M of them); the user vector computes per request (it must reflect the last 5 minutes of behavior)',
+      'Both compute per request for freshness',
+      'User vectors precompute; item vectors compute per request'
+    ],
+    answer: 1,
+    why: 'Split by cardinality × freshness: many-and-slow → offline index; one-and-fast-changing → online. That asymmetry IS the two-tower serving insight.'
+  },
+  {
+    q: 'Training used "user 7-day clicks" from the warehouse; serving computes it slightly differently in Redis. Result + fix?',
+    options: [
+      'No effect — the model generalizes',
+      'Training/serving skew: the model sees different feature distributions at serve time and silently underperforms. Fix: a feature store owning ONE definition consumed by both training and serving',
+      'Serving crashes on schema mismatch',
+      'Only cold-start users are affected'
+    ],
+    answer: 1,
+    why: 'Silent, no-error degradation — the nastiest failure class. The feature store as "single definition, two consumers" is its architectural fix, and the detail that sounds like production experience.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: 15-minute mini-mock — "recommend videos on a TikTok clone, 100M videos, 200ms budget." Funnel shape → two-tower serving split → feature store with the skew sentence → cold start + feedback-loop flags. This completes Module 12 — every ✨ AI-era bank question now has teaching content behind it.

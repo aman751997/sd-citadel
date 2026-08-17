@@ -1,0 +1,162 @@
+---
+title: 'Two Pointers'
+description: 'Three forms — opposite ends, reader & scribe, two iterables — with the invariants that make each one provable, in Java.'
+order: 1
+minutes: 35
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## When this pattern fires
+
+The brute force compares **pairs** or rebuilds an array — O(n²) or O(n) extra space — and one of these is true: the array is **sorted** (or has exploitable structure), you're asked for a **pair/triplet** with a property, or the change is **in-place** partitioning/compaction. Two pointers replaces "compare everything with everything" with "each pointer moves at most n steps" → **O(n), O(1) space**.
+
+Three distinct forms. Interviewers don't say which — the trigger tells you.
+
+---
+
+## Form I — Opposite Ends (converging)
+
+Pointers start at both ends, move toward each other, meet in the middle. **Fires when:** sorted array + target pair, symmetry check, or maximizing something between two boundaries.
+
+```java
+// Two Sum II — sorted array, find pair summing to target
+public int[] twoSum(int[] nums, int target) {
+    int lo = 0, hi = nums.length - 1;
+    while (lo < hi) {
+        int sum = nums[lo] + nums[hi];
+        if (sum == target) return new int[]{lo + 1, hi + 1}; // 1-indexed!
+        if (sum < target) lo++;   // need more → only lo++ can help
+        else hi--;                // need less → only hi-- can help
+    }
+    return new int[]{-1, -1};
+}
+```
+
+**Why moving is safe (the invariant you narrate):** the array is sorted, so if `sum < target`, then `nums[lo]` paired with ANY element ≤ `nums[hi]` is also too small — `lo`'s current value is fully eliminated, not just this pair. Every step permanently discards one element. That's the proof of O(n), and saying it is what separates "memorized" from "understands".
+
+**Container With Most Water** (you coded this) is the same skeleton with a greedy twist: move the **shorter** line, because the shorter side caps the area — keeping it while shrinking width can only lose. Same elimination logic, different justification. **Trapping Rain Water** (your queued Hard) extends it again: track `maxLeft`/`maxRight`; the side with the smaller max is fully determined → process it.
+
+<Mermaid code={`flowchart LR
+    subgraph arr["sorted: [2, 7, 11, 15], target 18"]
+      L["lo=2"] --- M1["7"] --- M2["11"] --- R["hi=15"]
+    end
+    S1["2+15=17 < 18 → lo++\n(2 can never pair bigger than 15 — eliminated)"] --> S2["7+15=22 > 18 → hi--"] --> S3["7+11=18 ✅"]`} />
+
+---
+
+## Form II — Same Direction (Reader & Scribe)
+
+Both pointers move left→right: the **reader** scans every element; the **scribe** marks where the next "kept" element lands. **Fires when:** in-place compaction — remove/keep/move elements without extra space.
+
+```java
+// Move Zeroes — push non-zeros left, zeros right, order preserved
+public void moveZeroes(int[] nums) {
+    int scribe = 0;                          // next slot for a non-zero
+    for (int reader = 0; reader < nums.length; reader++) {
+        if (nums[reader] != 0) {
+            if (reader != scribe) {          // minimize-writes guard (your variant)
+                int t = nums[scribe]; nums[scribe] = nums[reader]; nums[reader] = t;
+            }
+            scribe++;                        // scribe steps EVEN when reader==scribe
+        }
+    }
+}
+```
+
+**The invariant (say it before coding — your logged habit-gap):** *everything left of `scribe` is final and correct; everything between `scribe` and `reader` is discard/unprocessed territory.* Every reader step maintains it. When the reader finishes, `[0, scribe)` is the answer.
+
+**Remove Duplicates II** (your first unseen win) shows the form's flexibility: "keep at most 2" → the keep-condition becomes `nums[reader] != nums[scribe-2]`. The skeleton never changes; only the keep-condition does. **Dutch National Flag** (Sort Colors) upgrades to **three** pointers: `low` (next 0 slot), `mid` (reader), `high` (next 2 slot) — and the one rule that broke you once and never again: **after swapping with `high`, `mid` stays** (the swapped-in element is unexamined); after swapping with `low`, `mid` advances (it received a known 1... or was `mid==low`'s own element).
+
+---
+
+## Form III — Two Iterables
+
+One pointer per sequence, advancing by comparison rule. **Fires when:** merging sorted things, subsequence checks.
+
+```java
+// Merge Sorted Array — nums1 has buffer space at its END → merge BACKWARDS
+public void merge(int[] nums1, int m, int[] nums2, int n) {
+    int i = m - 1, j = n - 1, w = m + n - 1;   // w = write position, from the back
+    while (j >= 0) {                            // nums2 leftovers are the only real work
+        if (i >= 0 && nums1[i] > nums2[j]) nums1[w--] = nums1[i--];
+        else                               nums1[w--] = nums2[j--];
+    }
+    // i-leftovers are already in place — that's WHY we merge backwards
+}
+```
+
+**The insight to narrate:** merging forward overwrites unread `nums1` elements; the free space is at the end, so write from the end, largest-first. Loop condition `j >= 0` (not `i`) — if `nums2` is exhausted, remaining `nums1` prefix is already correctly placed. You quizzed 3/3 on exactly this — keep it warm.
+
+Subsequence check (Append Characters): reader walks the big string, pointer on the pattern advances only on match; leftover pattern = answer.
+
+---
+
+## Recognition table (the transfer weapon)
+
+| You see | Form | First sentence to say |
+|---------|------|----------------------|
+| sorted + "find pair/triplet summing to…" | I | "Sorted lets opposite-end pointers eliminate one element per step" |
+| "check palindrome / symmetric" | I | "Compare from both ends inward" |
+| "maximize area/water between lines" | I | "Move the limiting (shorter) side" |
+| "remove/move elements **in-place**" | II | "Reader-scribe: left of scribe is final" |
+| "at most K copies / partition by value" | II | "Reader-scribe with a modified keep-condition" |
+| "merge two sorted…", "is X a subsequence of Y" | III | "One pointer each; buffer at the end → merge backwards" |
+
+## Bug bestiary (yours, earned)
+
+- **Stale read after overwrite** (Valid Palindrome O(1) rewrite) — read a value you already overwrote. Guard: in-place = think swap, not copy.
+- **Exit-condition narration slip** (Sort Colors: said `2<=2`, was `2<=1`) — trace the LAST iteration by hand before declaring done.
+- **`mid` advances after high-swap** — it must not; the swapped-in element is unexamined.
+- **Scribe forgets to step when `reader==scribe`** in minimize-writes variant — scribe counts kept slots, not swaps.
+
+<Quiz questions={[
+  {
+    q: 'Two Sum II, sum < target. Why is lo++ CORRECT and not just plausible?',
+    options: [
+      'Smaller values are on the left, so moving lo helps',
+      'nums[lo] + nums[hi] is the LARGEST sum nums[lo] can form (hi is max remaining) — if even that is too small, nums[lo] pairs with nothing; it is eliminated permanently',
+      'hi-- would skip the answer',
+      'Both moves work; lo++ is convention'
+    ],
+    answer: 1,
+    why: 'The elimination argument is the pattern\'s proof — each step discards one element forever, hence O(n). "Smaller on the left" (option 1) is vibes; option 2 is the argument an interviewer accepts.'
+  },
+  {
+    q: 'Reader-scribe invariant, mid-loop with scribe=3, reader=7. What is true of the array?',
+    options: [
+      'Indexes 0-6 are processed and final',
+      'Indexes 0-2 are final answer territory; 3-6 hold discarded/duplicate values that no longer matter; 7+ unprocessed',
+      'Indexes 0-2 are sorted',
+      'Indexes 3-7 will all be overwritten'
+    ],
+    answer: 1,
+    why: 'Three zones: final [0,scribe), garbage [scribe,reader), unknown [reader,n). Being able to state the zones at any freeze-frame is what "invariant" means — and it\'s how you self-check mid-trace.'
+  },
+  {
+    q: 'Merge Sorted Array: why does the loop run on j >= 0 rather than i >= 0 (or both)?',
+    options: [
+      'j is always the longer array',
+      'If nums2 (j) is exhausted, remaining nums1 elements are ALREADY in their correct places — only unmerged nums2 elements represent pending work',
+      'Convention: iterate the second array',
+      'i can go negative and crash'
+    ],
+    answer: 1,
+    why: 'The backwards merge\'s hidden gift: nums1 leftovers need no move. Your Grimoire quiz nailed this — the j>=0 condition IS the insight, not a detail.'
+  },
+  {
+    q: 'Sort Colors: you swap nums[mid] with nums[high]. What happens to mid and why?',
+    options: [
+      'mid++ — a swap always completes an element',
+      'mid stays — the element that arrived FROM high is unexamined; advancing past it risks a misplaced 0 or 2 surviving',
+      'mid-- to re-check the previous element',
+      'mid jumps to high'
+    ],
+    answer: 1,
+    why: 'The mid-stays rule — your own 2026-06-12 lesson, explained in your own words then. High-swap brings unknown cargo; low-swap brings a known 1. Asymmetry is the whole trick.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: **3Sum next** (Form I + dedup discipline — the natural step from Two Sum II), then the boss of the pattern: **Trapping Rain Water**. Both are on your pending list; both fall to invariant-first narration.

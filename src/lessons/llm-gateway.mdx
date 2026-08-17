@@ -1,0 +1,91 @@
+---
+title: 'AI-Era: LLM Gateway & Agent Platforms'
+description: 'The control plane for company-wide LLM usage — routing, token budgets, fallbacks, tool-calling agents, and cost observability.'
+module: 12
+order: 3
+minutes: 25
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The question behind the question
+
+"Design an LLM gateway / AI agent platform" (Anthropic, Datadog, Salesforce ask it) is really: *50 teams are calling 5 model providers with no control — impose order.* It's the API gateway lesson re-armed with AI-specific concerns: cost, fallbacks, safety, and agents that call tools. Your day job (LLM integration in a multi-tenant product) IS this question — treat this lesson as arming an existing war story.
+
+## The gateway
+
+<Mermaid code={`flowchart LR
+    T["50 internal teams\n(one SDK)"] --> GW["LLM Gateway\n· authN per team\n· token-budget limits\n· model routing + fallback\n· prompt/response logging\n· PII redaction hooks\n· semantic cache"]
+    GW --> P1["OpenAI"]
+    GW --> P2["Anthropic"]
+    GW --> P3["self-hosted vLLM\n(inference lesson)"]
+    GW --> OBS[("usage ledger:\ntokens · cost · latency\nper team/model/feature")]`} />
+
+Walk the concerns in this order:
+
+- **One SDK, provider-agnostic schema.** Teams call `/v1/chat`; the gateway translates per provider. Provider lock-in and API drift become the gateway's problem — that's the product pitch in one line.
+- **Token-budget limiting per team** (inference lesson: tokens/min buckets + concurrent-stream caps). Budgets are *cost controls*, so they also need monthly ceilings + alerts at 80% — rate limiting meets FinOps.
+- **Routing + fallback:** requests declare a capability tier, not a vendor ("fast-cheap" vs "best-quality"); the gateway maps tiers to models. Provider 429/outage → **fallback chain** (Claude → GPT → self-hosted), with a circuit breaker per provider (load-balancing lesson). Streaming makes mid-stream failover mostly impossible — retry-from-start with idempotent logging is the honest answer, say it.
+- **The usage ledger** — every call appends `{team, model, tokens_in/out, cost, latency, feature-tag}`, aggregated into dashboards (time-series pattern). "Which team burned $40K last week and on what" is the first question the platform must answer.
+- **Cross-cutting safety hooks**: PII redaction pre-send (your vault-pattern war story plugs in here), response moderation, prompt-injection screening for tool-using agents.
+
+## The agent half — tools, loops, and blast radius
+
+An **agent** = LLM in a loop: model proposes a tool call → platform executes it → result goes back into context → repeat until done.
+
+The platform's job is making that loop safe and observable:
+
+- **Tool registry**: typed schemas (name, params, auth scope), per-team allowlists. The model *proposes*; the **platform executes** — the model never holds credentials. That sentence is the security architecture in miniature.
+- **Guardrails on the loop**: max iterations, per-step timeout, total token/cost budget per task; a runaway agent stops itself against a wall, not against your bill.
+- **Approval gates**: destructive tools (send email, mutate prod data) require human confirm or run dry-run-first. Blast radius is a config property of the tool, not a hope about the model.
+- **Tracing (OTEL)**: one trace per task, one span per LLM call/tool call, carrying token counts and cost. Debugging "the agent did something weird at step 7" without a trace is archaeology; with it, it's reading. Distributed-tracing bank question = this section.
+- **State**: agent tasks are long-lived → they're jobs (async-jobs template: persisted task row, status, resumability), not requests.
+
+## Questions this unlocks
+
+| Bank question | How it applies |
+|---------------|----------------|
+| **AI agent platform / LLM gateway** | this lesson end-to-end |
+| **Distributed tracing** | the OTEL section, expanded with sampling + span ingest (time-series pattern) |
+| **API gateway** (Tier 1) | same skeleton, simpler concerns — answering it now includes a free "and for LLM traffic you'd add…" flex |
+| **"Add AI features safely to our product"** | tool allowlists + budgets + approval gates is the answer skeleton |
+
+<Quiz questions={[
+  {
+    q: 'Why route by capability tier ("fast-cheap"/"best-quality") instead of teams hardcoding model names?',
+    options: [
+      'Model names are confidential',
+      'The gateway can swap providers on price/outage/deprecation without 50 teams changing code — the indirection IS the platform\'s value; fallback chains hang off tiers naturally',
+      'It reduces token usage',
+      'Providers require abstraction layers'
+    ],
+    answer: 1,
+    why: 'Same reason LBs route by service, not IP: indirection converts vendor churn from 50 migrations into 1 config change. State it as the product pitch.'
+  },
+  {
+    q: 'An agent needs to query the orders DB and send emails. Where do credentials live?',
+    options: [
+      'In the model\'s system prompt, marked confidential',
+      'The model only PROPOSES typed tool calls; the platform executes them with ITS credentials, checks the team\'s allowlist, and gates destructive tools behind approval',
+      'Encrypted in the conversation context',
+      'The agent gets a scoped token per task'
+    ],
+    answer: 1,
+    why: 'Anything in model context can leak into output (prompt injection makes this adversarial, not hypothetical). Propose-vs-execute separation is the load-bearing security boundary. (Option 4 is a refinement of 2\'s execution side, not a substitute for it.)'
+  },
+  {
+    q: 'Mid-stream, the primary provider dies at token 200 of a response. Honest gateway behavior?',
+    options: [
+      'Splice the fallback provider\'s continuation onto the 200 tokens',
+      'Retry from the start on the fallback (idempotently logged), surfacing a restart to the client — cross-provider mid-stream splicing produces incoherent output and is not a real capability',
+      'Return the 200 tokens as the final answer',
+      'Buffer full responses always, so streaming failures are invisible'
+    ],
+    answer: 1,
+    why: 'Different models can\'t continue each other\'s generation coherently. Option 4 "fixes" failover by deleting streaming\'s entire UX value. Knowing what NOT to promise is the senior part.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: 15-minute mini-mock — "LLM gateway for your actual company." Use the real teams, real providers, real vault/PII pattern. This one doubles as behavioral prep: it converts your day job into your strongest interview story.

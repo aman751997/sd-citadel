@@ -1,0 +1,102 @@
+---
+title: 'AI-Era: RAG & Vector Search'
+description: 'Embeddings, chunking, ANN indexes, rerankers — the retrieval pipeline that grounds LLMs, and where its latency budget goes.'
+module: 12
+order: 2
+minutes: 30
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The problem RAG solves
+
+LLMs don't know your private data and confidently invent answers. **Retrieval-Augmented Generation**: at question time, *find* the relevant documents and put them in the prompt, so the model answers from evidence. Asked by Amazon, OpenAI, Meta, Airbnb — usually as "design semantic search over company docs" or "design a support chatbot over our knowledge base."
+
+## The two pipelines
+
+<Mermaid code={`flowchart TD
+    subgraph IDX["Ingestion (async, the write path)"]
+      D["documents"] --> CH["chunk\n(~200-500 tokens,\noverlapping)"] --> EMB["embedding model\ntext → vector"] --> VDB[("vector DB\n+ metadata")]
+    end
+    subgraph QRY["Query (sync, the read path)"]
+      Q["user question"] --> QE["embed the question"] --> ANN["ANN search: top-50\nnearest chunks"] --> RR["reranker: top-50 → best 5"] --> LLM["LLM: answer from\nthese 5 chunks + cite"]
+    end
+    VDB --> ANN`} />
+
+**Embeddings**: a model maps text to a vector (~768–3072 floats) where semantic similarity ≈ vector closeness. "Reset my password" finds "credential recovery procedure" — no keywords shared. That's the whole magic; say it plainly.
+
+**Chunking** — the underrated design decision interviewers poke: embed whole documents and one vector must summarize 50 pages (retrieval gets mushy); embed sentences and you retrieve context-free fragments. Standard: **~200–500 token chunks with overlap**, split on structure (headings/paragraphs), each chunk carrying metadata `{doc_id, source, permissions, updated_at}`. Overlap exists so an answer straddling a boundary survives.
+
+## ANN — why exact search is off the table
+
+Exact nearest-neighbor = compare the query to **every** vector: 100M × 1536 floats per query — dead. **Approximate** nearest neighbor trades a little recall for orders of magnitude speed. Name one index: **HNSW** — a multi-layer skip-list-like graph, greedy search from coarse top layer to fine bottom, O(log n)-ish hops, high recall, **lives in RAM**.
+
+Estimation reflex (this is where the 4-axis method earns AI-era credit): 100M chunks × 1536 dims × 4 B ≈ **600 GB** + HNSW overhead → doesn't fit one node → **shard by document/tenant, fan out queries, merge top-K** (partitioning pattern, again). Compression (quantization: float32 → int8 or product-quantization) divides memory 4–30× at small recall cost — one sentence.
+
+## The latency budget — the senior frame
+
+Say the budget out loud; it reorganizes the whole design conversation:
+
+| Stage | Typical |
+|-------|---------|
+| Embed query | 10–20 ms |
+| ANN top-50 | 10–50 ms |
+| Rerank 50 | 50–150 ms |
+| **LLM generation** | **500 ms – 10 s** |
+
+**The LLM dominates everything.** Consequences: retrieval sophistication is nearly free (add the reranker — a cross-encoder scoring query+chunk pairs properly — big quality win for ~100 ms in a budget the LLM already blew); stream the answer (TTFT from the inference lesson); cache aggressively (semantic cache: embed the question, if a near-duplicate question was answered recently, serve that — FAQ-heavy products hit 30%+).
+
+## Freshness and permissions — the two production follow-ups
+
+- **Updates**: doc edited → re-chunk → re-embed → upsert; delete → remove vectors. Run it event-driven off the source of truth (CDC → queue → embed workers — the async-jobs template verbatim). Staleness = minutes; say the bound.
+- **Permissions**: the user must not retrieve chunks they can't read. **Filter in the vector query** (metadata pre-filter: `WHERE acl ∩ user_groups`), never post-filter after top-K — post-filtering can return 0 permitted results out of 50 (and quietly leaks existence). This is the security question hiding inside every enterprise RAG design; raising it unprompted is a strong signal — and multi-tenant ACL filtering is literally your day job.
+
+## Questions this unlocks
+
+| Bank question | How it applies |
+|---------------|----------------|
+| **RAG / semantic search** | this lesson is the design |
+| **Vector database** | the ANN + sharding + quantization sections, expanded |
+| **Support chatbot / "search our docs"** | RAG verbatim + citations |
+| **Recommendation retrieval** | same ANN machinery, item/user embeddings (recsys lesson) |
+| **Typeahead vs semantic** | know the boundary: prefix trie for keystrokes, RAG for questions |
+
+<Quiz questions={[
+  {
+    q: 'Why chunk documents (~300 tokens) instead of embedding each document whole?',
+    options: [
+      'Embedding models reject long inputs, that\'s all',
+      'One vector averaging 50 pages matches everything weakly and nothing well; chunk-level vectors give precise retrieval, and only relevant chunks spend the LLM\'s limited context',
+      'Chunks are cheaper to store',
+      'Vector DBs have size limits per record'
+    ],
+    answer: 1,
+    why: 'Granularity = retrieval precision + context economy. (Input limits exist too, but they\'re the shallow half of the answer.)'
+  },
+  {
+    q: 'The permission check on retrieved chunks — where must it happen and why?',
+    options: [
+      'Post-filter the top-50 after ANN search',
+      'Pre-filter inside the vector query via ACL metadata — post-filtering can leave 0 permitted results and leaks document existence via scores/citations',
+      'Let the LLM redact restricted content',
+      'Separate vector DB per user'
+    ],
+    answer: 1,
+    why: 'Filter-then-search, not search-then-filter. Option 3 puts access control in a probabilistic component (never); option 4 explodes storage. Your multi-tenant instincts apply directly here.'
+  },
+  {
+    q: 'Given the latency table, which optimization is highest-leverage for perceived speed?',
+    options: [
+      'Faster ANN index tuning (50ms → 20ms)',
+      'Skipping the reranker',
+      'Streaming the LLM answer + semantic caching of repeat questions — the LLM is 80-95% of latency, so attack it: stream for perceived speed, cache to skip it entirely',
+      'Sharding the vector DB further'
+    ],
+    answer: 2,
+    why: 'Optimize the dominant term. Options 1/2/4 shave the 20% and option 2 costs answer quality; the budget table exists to make this call obvious.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: 15-minute mini-mock — "semantic search over your company's Confluence + Slack, 10M docs, per-team permissions." Both pipelines, the memory estimate, the ACL pre-filter, the latency budget. This is the AI-era question you're most likely to actually get asked.

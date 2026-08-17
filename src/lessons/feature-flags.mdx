@@ -1,0 +1,100 @@
+---
+title: 'AI-Era: Feature Flags & Experimentation'
+description: 'Sticky bucketing, config streaming, kill switches, and enough A/B statistics to sound like you have shipped experiments.'
+module: 12
+order: 4
+minutes: 20
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## Why this is a real interview question
+
+Atlassian, LaunchDarkly, and increasingly everyone asks it — because it looks small ("if-statement as a service") and is actually a distributed config + statistics problem. It's also the rare design where **read latency ~0 is a hard requirement**: flag checks sit in every request's hot path, thousands of times per second.
+
+## The core decision: evaluate locally, distribute config
+
+A flag check must never be a network call. So the architecture inverts the naive design:
+
+<Mermaid code={`flowchart LR
+    A["admin UI"] --> CS["config service\n+ Postgres (truth,\nversioned, audited)"]
+    CS -->|"SSE / streaming push\n(realtime lesson)"| SDK1["app server SDK\n(full ruleset in memory)"]
+    CS -->|"..."| SDK2["app server SDK"]
+    SDK1 -->|"evaluate locally\n~microseconds"| REQ["request path"]
+    SDK1 -.->|"poll fallback +\nlast-known-good on disk"| CS`} />
+
+- **SDKs hold the entire ruleset in memory** and evaluate locally: ~µs, zero network.
+- **Changes stream to SDKs via SSE** (server push — one-way, realtime lesson's decision rule applied) with polling as fallback; propagation in seconds.
+- **Bootstrap resilience:** SDK starts while config service is down → last-known-good ruleset from local disk + safe defaults compiled in. "The flag system must never take the product down" is the availability sentence.
+- Truth lives in Postgres — versioned, audited ("who turned this on Friday 5pm").
+
+**The kill switch is the product's whole pitch:** bad deploy behind a flag → toggle off → seconds-wide blast radius, no rollback deploy. Say that before the interviewer asks what flags are for.
+
+## Sticky bucketing — deterministic, not stored
+
+Users must get the *same* variant every time (flapping UIs break users AND experiments). Wrong answer: store user→variant rows (billions of rows, a lookup on the hot path — everything we just avoided). Right answer:
+
+```
+bucket = hash(user_id + flag_key) % 10000
+→ variant by range: [0–4999] control, [5000–9999] treatment
+```
+
+Deterministic, stateless, no storage, instantly consistent everywhere. Salting by `flag_key` matters: without it, the same users land in "treatment" for *every* experiment (correlated cohorts poison all your results). Rollout 5%→50% = widen ranges; **already-bucketed users never flip** — say it.
+
+## Enough experimentation statistics (four sentences, no more)
+
+1. **Randomization is the point** — hash-bucketing gives unbiased cohorts; assignment must precede (and not correlate with) behavior.
+2. **Fix sample size / duration up front** — peeking at p-values daily and stopping when it looks good manufactures false positives.
+3. **Log exposure, not assignment** — analyze only users who actually *hit* the flagged code path; counting never-exposed users dilutes the effect.
+4. **Guardrail metrics** alongside the goal metric — the experiment that lifts clicks 2% and crashes retention should die automatically.
+
+That's the depth interviews want. If they push deeper, it's a data-science interview wearing a costume — say you'd pull in the stats platform.
+
+## Questions this unlocks
+
+| Bank question | How it applies |
+|---------------|----------------|
+| **Feature flag / experimentation platform** | this lesson |
+| **Any "how would you roll this out safely?"** wrap-up | percentage rollout + kill switch + guardrail metrics — a free strong ending for EVERY design |
+| **Remote config / app config systems** | same architecture minus the stats |
+| **LLM prompt/model experiments** | A/B between prompts or models via the same bucketing — the gateway lesson's routing + this lesson's stats |
+
+<Quiz questions={[
+  {
+    q: 'Why must flag evaluation be local (SDK memory) instead of a flag-service API call?',
+    options: [
+      'API calls are harder to authenticate',
+      'Flag checks run thousands of times/sec inside the request hot path — a network hop per check adds latency and makes the flag service a fatal single point of failure for everything',
+      'Local evaluation is easier to test',
+      'SSE cannot carry evaluation results'
+    ],
+    answer: 1,
+    why: 'Push config, evaluate locally: the inversion that defines this design. It also produces the availability story (last-known-good on disk) for free.'
+  },
+  {
+    q: 'Why hash(user_id + flag_key) rather than hash(user_id)?',
+    options: [
+      'It distributes more uniformly',
+      'Without the flag salt, the same cohort lands in treatment for EVERY experiment — cohorts correlate across experiments and cross-contaminate all results',
+      'user_id alone can collide',
+      'The flag key makes the hash cryptographically secure'
+    ],
+    answer: 1,
+    why: 'Independent randomization per experiment. One token of salt, statistical validity of the whole platform — favorite interviewer detail.'
+  },
+  {
+    q: 'PM checks the dashboard daily and stops the experiment the first day p < 0.05. What is wrong?',
+    options: [
+      'Nothing — that is what significance means',
+      'Peeking: repeated interim checks with stop-on-significance inflates false positives massively; sample size/duration must be fixed up front (or use sequential-testing methods built for peeking)',
+      'The sample was too small on day one',
+      'p-values require a week minimum by convention'
+    ],
+    answer: 1,
+    why: 'Optional stopping is the most common real-world experimentation sin. Naming it (and the fixed-horizon or sequential-test remedy) is what "has actually shipped experiments" sounds like.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: 10-minute mini-design — flags for your actual product, then the wrap-up flex rep: take any earlier mock (rate limiter, feed) and add the "rollout: 1% → flags → guardrails → kill switch" ending in 60 seconds. That ending upgrades every design you'll ever present.

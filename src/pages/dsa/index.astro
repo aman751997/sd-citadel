@@ -1,0 +1,87 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import { DSA, DSA_DEFERRED } from '../../dsa';
+import { BASE } from '../../paths';
+
+const dsaLessons = await getCollection('dsa');
+const lessonBySlug = new Map(dsaLessons.map((l) => [l.id, l]));
+const total = DSA.reduce((s, p) => s + p.problems.length, 0);
+const done = DSA.reduce((s, p) => s + p.problems.filter((q) => q.done).length, 0);
+const diffColor: Record<string, string> = { E: 'diff-e', M: 'diff-m', H: 'diff-h' };
+---
+<Base title="DSA Arsenal" description="All patterns, all problems, all links — the whole coding-round map on one page">
+  <h1>⚔️ The DSA Arsenal</h1>
+  <p class="lede">
+    The whole coding-round map: 20 patterns, {total} problems (Blind75-anchored, NeetCode-150 complete),
+    every one linked. Learn the pattern lesson, then fight its problems in order. <strong>{done}/{total} slain.</strong>
+    💎 = LeetCode premium (free LintCode mirror linked).
+  </p>
+  <p class="lede dim">Statuses mirror Notion (tracker of record). Solved something? Tell the buddy — both get updated.</p>
+
+  {DSA.map((pat) => {
+    const lesson = pat.lesson ? lessonBySlug.get(pat.lesson) : undefined;
+    const patDone = pat.problems.filter((q) => q.done).length;
+    return (
+      <section class="pattern">
+        <h2>{pat.id}. {pat.title} <span class="count">{patDone}/{pat.problems.length}</span></h2>
+        <p class="fires">⚡ Fires when: {pat.fires}</p>
+        {lesson ? (
+          <a class="lesson-link" href={`${BASE}dsa/lessons/${lesson.id}/`}>📖 Pattern lesson: {lesson.data.title} (~{lesson.data.minutes} min)</a>
+        ) : (
+          <span class="lesson-link pending">🛠️ Pattern lesson — forged when this pattern's week opens</span>
+        )}
+        <div class="qtable-wrap">
+          <table>
+            <thead><tr><th></th><th>Problem</th><th>Sub-pattern</th><th>Diff</th><th>Trigger</th><th>Links</th></tr></thead>
+            <tbody>
+              {pat.problems.map((q) => (
+                <tr class={q.done ? 'row-done' : ''}>
+                  <td>{q.done ? '✅' : '⬜'}</td>
+                  <td class="pname">{q.name}{q.b75 && <span class="tag">B75</span>}{q.premium && <span class="tag prem">💎</span>}</td>
+                  <td class="dim">{q.sub}</td>
+                  <td><span class={diffColor[q.diff]}>{q.diff}</span></td>
+                  <td class="dim trigger">{q.trigger}</td>
+                  <td class="links">
+                    <a href={`https://leetcode.com/problems/${q.lc}/`} target="_blank" rel="noopener">LC</a>
+                    {q.lint && <a href={q.lint} target="_blank" rel="noopener">LintCode</a>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    );
+  })}
+
+  <blockquote><p>{DSA_DEFERRED}</p></blockquote>
+</Base>
+
+<style>
+  .lede { color: var(--text-dim); }
+  .dim { color: var(--text-dim); }
+  .pattern { margin-top: 2.3rem; }
+  .count { font-size: 0.8rem; font-family: var(--mono); color: var(--accent); font-weight: 400; margin-left: 0.4rem; }
+  .fires { color: var(--text-dim); font-size: 0.88rem; margin: 0.2rem 0 0.5rem; }
+  .lesson-link {
+    display: inline-block; font-size: 0.88rem; font-weight: 600;
+    padding: 0.35rem 0.8rem; border: 1px solid var(--accent-dim); border-radius: 7px;
+    text-decoration: none; margin-bottom: 0.7rem; color: var(--accent);
+  }
+  .lesson-link.pending { color: var(--text-dim); border-style: dashed; border-color: var(--border); }
+  .qtable-wrap { overflow-x: auto; }
+  table { font-size: 0.83rem; min-width: 720px; }
+  .pname { font-weight: 600; white-space: nowrap; }
+  .row-done { opacity: 0.6; }
+  .tag {
+    font-size: 0.65rem; font-weight: 700; border: 1px solid var(--blue); color: var(--blue);
+    border-radius: 4px; padding: 0 0.3rem; margin-left: 0.4rem; vertical-align: middle;
+  }
+  .tag.prem { border-color: var(--accent); color: var(--accent); }
+  .trigger { font-size: 0.78rem; }
+  .links a { margin-right: 0.6rem; white-space: nowrap; }
+  .diff-e { color: var(--green); font-family: var(--mono); }
+  .diff-m { color: var(--accent); font-family: var(--mono); }
+  .diff-h { color: var(--red); font-family: var(--mono); }
+</style>

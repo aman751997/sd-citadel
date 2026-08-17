@@ -1,0 +1,103 @@
+---
+title: 'Pattern: Time-Series & Aggregation'
+description: 'Metrics, leaderboards, counters, trending — the write-a-firehose, read-a-summary problem and its three tools.'
+module: 10
+order: 1
+minutes: 30
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The pattern in one sentence
+
+Millions of tiny timestamped events pour in; nobody ever reads them individually — they read **summaries over windows** (p99 last 5 min, top-10 today, views this hour). The design job: absorb the firehose cheaply and precompute the summaries readers actually ask for.
+
+**Trigger words:** "metrics", "analytics", "dashboard", "leaderboard", "trending", "view counts", "alerts on thresholds", "clicks per campaign".
+
+## Tool 1 — Pre-aggregation: never store what you won't read
+
+The naive design stores every raw event and computes `AVG(...)` at query time — dead at scale (a dashboard query scanning 100M rows per refresh). Instead, **aggregate on ingest**:
+
+<Mermaid code={`flowchart LR
+    E["events firehose\n(1M/s)"] --> K[("Kafka\nkeyed by series")]
+    K --> AGG["stream aggregators:\nper minute, per series:\ncount, sum, min, max, p99"]
+    AGG --> TS[(time-series store\n1-min rollups)]
+    TS --> RU["background rollups:\n1min → 1hr → 1day"]
+    D["dashboards"] -->|"read tiny\nprecomputed rows"| TS`} />
+
+- **Resolution ladder + retention:** raw/1-min data kept days, 1-hour kept months, 1-day kept years. Storage estimate collapses (estimation lesson: say the ladder), and old-data queries stay fast because they read coarse rollups.
+- **Percentiles don't average** — you can't combine two p99s. Store **histograms/sketches** per window and merge those. One sentence, big signal.
+- Late events (mobile clients, retries) → **watermarks**: "window closes at T+2min; later events go to a correction path." Name it, don't derive it.
+
+This is "move work to write time" again — the same trade as feed fan-out and typeahead top-K. Third appearance; by now you should *see* it coming on unseen problems.
+
+## Tool 2 — Sharded counters: when one number is too hot
+
+A viral video's view counter takes 100K increments/sec — a single row/key melts (hot key, fourth costume). Fix: **split the counter into N shards** (`views:{video}:{0..15}`), increment a random shard, read = sum of 16. Write contention drops 16×; reads pay a small fan-in. Batch further in the app (accumulate 100 locally, flush one +100) when "views" tolerates seconds of lag — which it always does.
+
+## Tool 3 — Top-K and the honest approximation
+
+"Top 10 trending" over a firehose has an exact answer only if you count *everything* — often impossible in memory (millions of distinct keys). Two-level standard answer:
+
+- **Exact, bounded keyspace:** Redis **sorted set** (`ZINCRBY views:1h video123`) → `ZREVRANGE 0 9` is the leaderboard. Works to millions of members; say the memory estimate.
+- **Approximate, unbounded keyspace:** **count-min sketch** — a fixed-size 2D array of counters updated via k hashes; overestimates slightly, never underestimates; pair with a small heap of current top-K candidates. The sentence to say: *"exact counting of every URL/search-term doesn't fit memory; a count-min sketch gives top-K with bounded error in kilobytes."* Interviewers accept the name + property; they rarely want internals derived.
+
+Windowing for "trending last hour": maintain per-minute sorted sets and union/decay them, or bucket-per-window sketches — say buckets, avoid inventing sliding-window magic on the spot.
+
+## Storage: why time-series stores are LSM-shaped
+
+Write-heavy append workloads fit **LSM trees** (memtable → flushed immutable SSTables → compaction) — sequential writes, no in-place updates, which is why Cassandra/InfluxDB/ClickHouse-family engines win here over B-tree row stores. Plus columnar layout + delta/gorilla compression: metrics compress ~10×+ because consecutive values barely change. Two sentences total — storage-engine depth beyond this only if the interviewer digs.
+
+The other disease to name: **cardinality explosion** — a `user_id` tag on a metric turns 1 series into 50M. Tag design (bounded-cardinality labels only) is the operational fix; it's the Datadog walkthrough's favorite deep dive.
+
+## Questions this pattern unlocks
+
+| Bank question | How the pattern applies |
+|---------------|------------------------|
+| **Metrics / Datadog** (walkthrough) | the whole pattern + cardinality + alerting (sliding threshold checks on rollups) |
+| **Ad click aggregator** | stream aggregation + exactly-once-ish counting (contention lesson) + watermark windows |
+| **Top-K / leaderboard** | sorted sets vs count-min, windowing |
+| **YouTube view counts** | sharded counters + periodic flush to truth |
+| **Trending topics** | count-min + per-window buckets + decay |
+| **Distributed tracing ingest** | span firehose + sampling + time-partitioned storage |
+| **Strava heatmaps** | geo (previous pattern) + time bucketing — patterns compose |
+
+<Quiz questions={[
+  {
+    q: 'Dashboard shows p99 latency per service, 5-min windows, 30 days back. Store what?',
+    options: [
+      'Every request latency, query with PERCENTILE() at read',
+      'Per-service per-minute histograms/sketches, rolled up on a resolution ladder — p99s can\'t be averaged, so store mergeable distributions, precomputed at ingest',
+      'The p99 per minute as a single number, averaged into windows at read',
+      '5-minute p99 numbers only, computed at ingest'
+    ],
+    answer: 1,
+    why: 'Two traps in one: raw storage dies at scale (option 1), and percentiles don\'t compose (option 3\'s averaging of p99s is mathematically wrong — the most common candidate error in this domain). Mergeable histograms solve both.'
+  },
+  {
+    q: 'A video goes viral: 100K view-increments/sec on one counter. First fix?',
+    options: [
+      'Move the counter to a bigger Redis node',
+      'Shard it — views:{id}:{0..15}, increment one at random, sum on read; optionally batch increments app-side since view counts tolerate lag',
+      'Queue the increments and apply serially',
+      'Sample: count every 10th view and multiply'
+    ],
+    answer: 1,
+    why: 'Hot key, costume #4 — same diagnosis muscle as hot shard/partition. Serial queueing (3) just moves the bottleneck; sampling (4) changes the product answer without being asked to.'
+  },
+  {
+    q: '"Top 10 searched terms, last hour, billions of searches." Why does the answer start with count-min sketch?',
+    options: [
+      'It computes faster than sorted sets',
+      'The distinct-term space doesn\'t fit exact counters in memory; a sketch gives frequency estimates with bounded overcount in fixed small space — paired with a heap for the current top-K',
+      'It is the only windowable structure',
+      'Sorted sets can\'t rank strings'
+    ],
+    answer: 1,
+    why: 'The trigger is UNBOUNDED KEYSPACE. With bounded keys (10M videos) a sorted set is exact and simpler — say which regime you\'re in before picking, that\'s the whole judgment being tested.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: 12-minute mini-design — "per-campaign ad-click dashboard, 500K clicks/s, 5s freshness." Ingest → keyed aggregation → rollups → sharded hot counters, ending with the storage estimate ladder. Weekend mock: **Datadog** — the Tier-4 heavyweight this pattern unlocks.

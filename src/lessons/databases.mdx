@@ -1,0 +1,127 @@
+---
+title: 'Databases: SQL vs NoSQL, Sharding, Replication'
+description: 'The database decisions every design makes — picking a store, splitting it, copying it, and generating IDs — with defensible reasons.'
+module: 2
+order: 1
+minutes: 35
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The decision that opens every design
+
+After the API phase, the first real design decision is always the same: **where does the data live?** Interviewers don't care which logo you pick — they care whether your reason survives two follow-up questions.
+
+## SQL vs NoSQL — the honest decision rule
+
+Start from this default: **Postgres until proven otherwise.** Relational databases give you ACID transactions, joins, secondary indexes, and 40 years of tooling. A single beefy Postgres box handles thousands of QPS and terabytes — most systems in interviews never actually outgrow it (your estimation lesson exists to prove this with numbers).
+
+You reach for NoSQL when you have a *specific* reason:
+
+| Store type | Reach for it when | Examples |
+|-----------|-------------------|---------|
+| **Key-value** | simple get/put by key at huge scale, predictable low latency | DynamoDB, Redis |
+| **Wide-column** | write-heavy, time-ordered data, known query patterns | Cassandra (feeds, messages, metrics) |
+| **Document** | nested, schema-flexible entities, queried whole | MongoDB (product catalogs) |
+| **Graph** | queries that walk many-hop relationships | Neo4j (fraud rings, social graphs) |
+
+The real difference isn't "scale" — modern SQL shards fine. It's this: **NoSQL asks you to know your query patterns up front and denormalize for them; SQL lets you ask new questions later.** Cassandra is fast because it's basically a sorted write-optimized log per partition key — and it punishes you the day you need a query you didn't model for.
+
+Interview shape: "I'll start with Postgres for the transactional entities. Messages, though, are append-heavy, time-ordered, and read by conversation — that access pattern fits Cassandra partitioned by `conversation_id`." Specific data → specific store → specific reason.
+
+## Replication — copies for safety and reads
+
+<Mermaid code={`flowchart LR
+    W["✍️ Writes"] --> P[(Primary)]
+    P -->|replication| R1[(Replica 1)]
+    P -->|replication| R2[(Replica 2)]
+    R1 --> READS["📖 Reads"]
+    R2 --> READS`} />
+
+**Leader-follower** (the default): all writes to the primary, replicas follow. Two design levers:
+
+- **Sync vs async replication.** Sync = no data loss on failover, slower writes. Async = fast writes, replicas lag (milliseconds to seconds), failover can lose the last writes. Most systems: async, and you *say* you accept the lag.
+- **Replica lag creates the classic bug:** user writes to primary, immediately reads from a lagging replica, their change "disappears." Fix: read-your-own-writes — route that user's reads to the primary briefly, or use a session token carrying the last-write position.
+
+**Multi-leader / leaderless** (Dynamo-style) come up in infra questions — quorums from the core-concepts lesson. For product designs, leader-follower is almost always the answer.
+
+## Sharding — splitting when one box isn't enough
+
+When estimation says one node can't hold the data or the write QPS, you **shard**: split rows across nodes by a **partition key**.
+
+**The whole game is choosing the key.** Test any candidate key against two questions:
+
+1. **Does it spread load evenly?** Sharding tweets by `user_id` puts a celebrity's storm on one shard (hot shard). Sharding by `tweet_id` spreads evenly.
+2. **Do your common queries stay on one shard?** "All messages in conversation X" wants sharding by `conversation_id` — one shard answers the query. Shard by `message_id` and every conversation read becomes a scatter-gather across all shards.
+
+These two often conflict — that tension IS the deep dive. Say it explicitly: "user_id keeps a user's data together for cheap queries, but risks hot shards for power users; I'll take user_id and handle the celebrity case separately."
+
+Cross-shard consequences you must name before the interviewer does: no cross-shard joins (denormalize or query-side join), no cross-shard transactions (sagas/idempotency — contention pattern lesson), resharding is painful (consistent hashing helps — partitioning lesson).
+
+## ID generation — small topic, frequent question
+
+Auto-increment breaks the moment you shard (two shards both issue id=42). Options:
+
+| Strategy | Property | Catch |
+|----------|----------|-------|
+| **UUIDv4** | no coordination, globally unique | random → terrible index locality, 36 chars |
+| **UUIDv7 / ULID** | no coordination + **time-ordered** | the modern default |
+| **Snowflake** (timestamp + machine-id + sequence) | 64-bit, time-ordered, compact | needs machine-id assignment; clock skew must be handled (refuse to go backwards) |
+| **Ticket server / DB range allocation** | simple, dense IDs | central service to keep available |
+
+Interview default: "Snowflake-style or UUIDv7 — time-ordered so indexes append instead of scattering, no coordination needed." Time-ordering matters because B-tree inserts at random positions thrash pages; appending to the right edge is cheap.
+
+## Indexes — the 10-second version you must have
+
+An index is a sorted structure (usually B-tree) letting the DB find rows without scanning. Every index speeds one read shape and taxes **every write**. When you say "we query messages by (conversation_id, created_at)", say "with a composite index on exactly that." Unindexed query on a big table in your design = the interviewer's easiest kill shot.
+
+<Quiz questions={[
+  {
+    q: 'Interviewer: "Why Cassandra for chat messages?" Weak vs strong — pick the strong:',
+    options: [
+      '"Cassandra scales better than SQL"',
+      '"Messages are append-heavy and always read by conversation in time order — that matches Cassandra\'s partition-key + clustering-column model, partitioned by conversation_id"',
+      '"WhatsApp uses something similar"',
+      '"NoSQL is standard for chat apps"'
+    ],
+    answer: 1,
+    why: 'Access pattern → storage model fit. Options 1, 3, 4 are logo-dropping — they die to the follow-up "why exactly?"'
+  },
+  {
+    q: 'You shard a URL shortener by user_id. What breaks?',
+    options: [
+      'Nothing — user_id is always a safe key',
+      'The redirect path: GET /{code} has no user_id, so finding the row means asking every shard. Shard by short code instead — the hot query must stay single-shard',
+      'Writes become slower',
+      'IDs collide across shards'
+    ],
+    answer: 1,
+    why: 'Rule 2 of key choice: the dominant query (redirect, 100:1 read-heavy) must resolve on one shard. Scatter-gather on your hottest path is a failed design.'
+  },
+  {
+    q: 'User posts a comment, page refreshes, comment gone. It reappears seconds later. Diagnosis + cheapest fix?',
+    options: [
+      'The write failed and retried — add stronger transactions',
+      'Async replica lag: the read hit a follower. Fix with read-your-own-writes — pin that user\'s reads to the primary briefly',
+      'Cache invalidation bug — flush the cache',
+      'Eventual consistency — nothing can be done'
+    ],
+    answer: 1,
+    why: 'THE classic replication-lag symptom. Naming both the cause and the targeted fix (not "make everything strongly consistent") is the senior answer.'
+  },
+  {
+    q: 'Why prefer UUIDv7/Snowflake over UUIDv4 for a primary key at scale?',
+    options: [
+      'v7 is more unique',
+      'v7 is shorter',
+      'Time-ordered IDs append to the index\'s right edge; random v4 inserts scatter across B-tree pages and thrash the cache on every write',
+      'v4 can collide across shards'
+    ],
+    answer: 2,
+    why: 'Index locality. Random keys turn every insert into a random-page write; time-ordered keys make inserts sequential. At high write QPS this is a real, measurable difference.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: **shard-key gauntlet** — 6 systems (chat, tweets, orders, metrics, URL shortener, Uber locations), you name partition key + the query it optimizes + the hot-spot risk, 90 seconds each. Your M:N modeling trap gets one rep too.

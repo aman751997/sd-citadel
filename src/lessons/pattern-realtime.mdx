@@ -1,0 +1,105 @@
+---
+title: 'Pattern: Realtime — Polling, SSE, WebSockets'
+description: 'How servers push to clients, how to pick between the three options, and the stateful-server problem that push creates.'
+module: 4
+order: 1
+minutes: 30
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The pattern in one sentence
+
+HTTP is client-asks-server; the moment your product needs **server-tells-client** (new message, driver moved, doc edited, order status), you pick one of three delivery mechanisms — and inherit the state problem that comes with the persistent ones.
+
+**Trigger words in a problem statement:** "live", "real-time", "instantly see", "presence/online status", "watch together", "collaborative".
+
+## The three mechanisms
+
+| | How | Latency | Cost | Pick when |
+|--|-----|---------|------|-----------|
+| **Polling** | client asks every N sec | ≤ N sec | N× wasted requests, mostly empty | updates are rare/slow; simplicity wins (order status page) |
+| **SSE** (server-sent events) | one long-lived HTTP response, server streams events down | instant | one connection per client; **one-way only** | server→client only: notifications, live scores, LLM token streams |
+| **WebSocket** | full-duplex persistent TCP connection | instant | one connection per client + connection state; more infra | two-way chat, games, collaborative editing, live location |
+
+Decision rule you can say verbatim: **"Poll if you can, SSE if the server only pushes, WebSocket only when the client also sends in real time."** Interviewers respect starting simple; jumping to WebSockets for a thing polling handles is box inflation.
+
+(Long-polling — "ask and hold until there's news" — is polling's smarter cousin; mention it as the historical middle step if asked.)
+
+## The real cost of persistence: your servers just became stateful
+
+This is where the pattern earns its deep-dive. A WebSocket/SSE server holds live connections — so unlike your stateless API fleet, **it matters which server a user is connected to**:
+
+<Mermaid code={`flowchart LR
+    A["Alice's phone"] --- WS1["WS server 1\n(holds Alice's conn)"]
+    B["Bob's phone"] --- WS2["WS server 2\n(holds Bob's conn)"]
+    S["chat service:\n'deliver msg to Bob'"] --> PS[("pub/sub or\nconnection registry")]
+    PS --> WS2`} />
+
+The routing problem — "a message for Bob arrives; which of my 50 WS servers has Bob?" — has two standard answers:
+
+1. **Connection registry**: Redis map `user_id → ws_server_id`, written on connect, deleted on disconnect. Message for Bob → look up → deliver to that server (RPC or per-server queue).
+2. **Pub/sub broadcast**: every WS server subscribes to channels (e.g., `user:{id}` or `room:{id}` in Redis pub/sub); the sender publishes; whichever server holds the connection gets it. Simpler, at the cost of broker fan-out traffic.
+
+Either is fine — **choosing one out loud** is what counts.
+
+Scale numbers to have ready: one tuned server holds ~100K–1M idle connections (memory-bound, ~10 KB each — estimate!); 10M concurrent users ≈ tens of servers; balance by **least-connections or consistent hashing** (load-balancing lesson), because connections are long-lived — a restarted server must not sit empty while others burst.
+
+## The reliability kit (say all four in any chat-like design)
+
+- **Heartbeats** — ping/pong every ~30s; silence = dead connection, clean up registry.
+- **Reconnect with backoff + jitter** — a WS server restart drops 500K connections; without jitter they all reconnect in the same second (self-inflicted stampede — same math as cache stampede).
+- **Missed-message catch-up** — the connection WILL drop. On reconnect the client sends its last-seen message/sequence ID, server replays from persistent storage. **Push is the fast path; the DB is the truth.** A design where messages exist only in the socket is broken.
+- **Presence** — online/offline = registry entry + heartbeat freshness; "last seen" = timestamp on disconnect. Cheap once the registry exists.
+
+## Questions this pattern unlocks
+
+| Bank question | How the pattern applies |
+|---------------|------------------------|
+| **WhatsApp / Messenger** (walkthrough next) | WS + registry + delivery receipts + catch-up — the pattern's full showcase |
+| **Discord / Slack** | same + channel fan-out: publish to `room:{id}`, servers holding members deliver; huge rooms → the fan-out pattern |
+| **Live comments / sports scores** | SSE, one-way — don't pay for WebSockets |
+| **Uber (location stream)** | driver → WS/UDP-ish upstream every 4s; rider watches via WS — meets geospatial pattern |
+| **Google Docs cursors** | WS broadcast to doc room — meets collaboration pattern |
+| **Order/delivery status page** | polling every 10s. Saying "polling is enough here" is a flex, not a cop-out |
+| **Zoom (media)** | signaling over WS; media itself is UDP/WebRTC via SFU — one sentence, don't go deeper unprompted |
+
+<Quiz questions={[
+  {
+    q: 'Live sports scores to 5M viewers — pick the mechanism and reason:',
+    options: [
+      'WebSockets — real-time means WebSockets',
+      'SSE — pure server→client push, no upstream traffic to justify duplex; simpler infra, same instant delivery',
+      'Polling every 500ms — simplest',
+      'Kafka consumers on each phone'
+    ],
+    answer: 1,
+    why: 'One-way push = SSE\'s exact home. WebSockets work but buy duplex nobody uses; 500ms polling at 5M viewers = 10M wasted QPS. (Clients consuming Kafka directly is never the answer.)'
+  },
+  {
+    q: 'Message for Bob arrives; you run 50 WebSocket servers. How does it reach him?',
+    options: [
+      'Broadcast to all 50 servers — whoever has Bob delivers',
+      'A connection registry (Redis: user→server, maintained on connect/disconnect) routes it to server 7 directly — or pub/sub on user channels; pick one and say it',
+      'Bob\'s next poll picks it up',
+      'The load balancer remembers Bob\'s server'
+    ],
+    answer: 1,
+    why: 'The routing problem IS this pattern\'s core deep dive. Naive broadcast (option 1) is actually pub/sub done crudely — fine to evolve from, but say the registry/pub-sub tradeoff explicitly.'
+  },
+  {
+    q: 'A WS server dies; 500K clients reconnect. Two things your design must have — which pair?',
+    options: [
+      'Bigger servers and TCP keepalive',
+      'Reconnect with jittered backoff (no synchronized stampede) + last-seen-ID catch-up from persistent storage (no lost messages while disconnected)',
+      'Sticky sessions and session replication',
+      'A standby server with the same IP'
+    ],
+    answer: 1,
+    why: 'The two failure consequences: the reconnect wave (stampede math) and the gap in delivery (socket ≠ source of truth). Both fixes are client-protocol design, not server hardware.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: **mechanism speed round** — 8 features named fast (typing indicator, stock ticker, food-delivery map, turn-based game, code editor sharing, flash-sale stock counter…), you call poll/SSE/WS + one-line reason each. Then next weekend's mock: **WhatsApp** — this pattern's walkthrough.

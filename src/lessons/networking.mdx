@@ -1,0 +1,101 @@
+---
+title: 'Networking Essentials'
+description: 'DNS to gRPC — the request path every design starts with, and the protocol choices interviewers probe.'
+module: 1
+order: 4
+minutes: 25
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The anatomy of one request
+
+Every design you'll ever draw starts with "client sends a request." Here's what actually happens, because interviewers probe it:
+
+<Mermaid code={`sequenceDiagram
+    participant C as Client
+    participant D as DNS
+    participant LB as Load Balancer
+    participant S as App Server
+    C->>D: where is api.example.com?
+    D-->>C: 34.120.x.x (cached with TTL)
+    C->>LB: TCP handshake + TLS handshake
+    C->>LB: HTTPS request
+    LB->>S: forward (health-checked pool)
+    S-->>C: response`} />
+
+**DNS** resolves name → IP. It's a hierarchical, heavily cached system — the TTL on a record is a real design lever: low TTL (60s) lets you fail over fast but increases lookup load; high TTL (24h) means a bad record haunts you for a day. GeoDNS returns different IPs by region — the cheapest form of "route users to the nearest datacenter."
+
+**TCP** gives you reliable, ordered bytes — at the cost of a handshake round trip. **TLS** adds encryption — another round trip or two. This is why HTTPS connection setup to a far region is slow, and why we keep connections alive and pooled.
+
+## TCP vs UDP — the one-liner each
+
+| | TCP | UDP |
+|--|-----|-----|
+| Guarantees | delivery, ordering | none — fire and forget |
+| Cost | handshake, head-of-line blocking | nearly free |
+| Use | almost everything (HTTP, DBs) | video calls, game state, DNS — where a late packet is worse than a lost one |
+
+Interview line: "Zoom uses UDP because a 2-second-old video frame is garbage — better to drop it than block newer frames behind it (head-of-line blocking)." That sentence covers 90% of UDP questions.
+
+## HTTP versions — what changed and why you care
+
+- **HTTP/1.1** — one request at a time per connection. Browsers open ~6 parallel connections to cope.
+- **HTTP/2** — multiplexes many requests over one connection, binary framing, header compression. Killed the "bundle everything into one file" era.
+- **HTTP/3 (QUIC)** — runs on UDP to remove TCP's head-of-line blocking; faster handshakes, connection survives IP change (mobile).
+
+You need one design-relevant fact: HTTP/2 multiplexing is why gRPC (built on it) handles many concurrent internal calls on few connections.
+
+## REST vs gRPC vs GraphQL
+
+| | Best for | Why |
+|--|---------|-----|
+| **REST + JSON** | public APIs, interviews' default | universal, cacheable, debuggable |
+| **gRPC** | internal service-to-service | binary protobuf (small, fast), streaming, generated clients — but browsers can't speak it natively |
+| **GraphQL** | client-shaped reads over many resources | one round trip for nested data; costs server complexity, caching gets harder |
+
+Default in interviews: **REST for the public API, gRPC inside** if microservices come up. Only reach for GraphQL when the problem is literally "mobile clients need flexible nested reads" (e.g., a content app aggregating many entities per screen).
+
+## Where TLS terminates, and the stateless rule
+
+The load balancer usually terminates TLS (decrypts), so app servers see plain HTTP — simpler, and lets the LB route on the URL (L7 — next lessons). Everything behind it should be **stateless**: any server can handle any request, session identity comes from a signed token (JWT) or a shared session store, not server memory. Stateless servers = horizontal scaling = the assumption every design you draw depends on. If a server holds state (WebSocket connections, in-progress uploads), you must say how requests find the right server — that's a deep dive, not an accident.
+
+<Quiz questions={[
+  {
+    q: 'You need sub-minute failover to a standby region using DNS. What is the catch?',
+    options: [
+      'DNS cannot point to two regions',
+      'You need a low TTL (~60s) — and pay for it with constant re-resolution load, plus some clients ignore TTLs anyway',
+      'GeoDNS makes failover automatic',
+      'There is no catch — DNS failover is instant'
+    ],
+    answer: 1,
+    why: 'TTL is the lever: low = fast failover + more lookups; high = cached staleness. And misbehaving resolvers that ignore TTLs are why serious failover also uses anycast or LB-level health checks.'
+  },
+  {
+    q: 'Two internal microservices exchange thousands of small calls/sec. Interviewer asks REST/JSON vs gRPC. Strongest answer:',
+    options: [
+      'REST — it is the standard',
+      'gRPC — protobuf is smaller and faster to serialize, HTTP/2 multiplexes the calls, and generated clients catch schema drift at compile time',
+      'GraphQL — fewer round trips',
+      'Either works, no real difference'
+    ],
+    answer: 1,
+    why: 'Internal + high-volume + typed = gRPC\'s home turf. REST stays for the public edge. "Either works" wastes a free chance to show judgment.'
+  },
+  {
+    q: 'Why must app servers behind a load balancer be stateless?',
+    options: [
+      'Stateless code has fewer bugs',
+      'So any server can serve any request — enabling horizontal scaling, rolling deploys, and instant failover; state lives in tokens or shared stores',
+      'Because HTTP is a stateless protocol',
+      'To reduce memory usage'
+    ],
+    answer: 1,
+    why: 'The whole scaling model rests on this. The moment a server holds unique state (say, WebSocket connections), routing to the right server becomes a design problem you must address explicitly.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: narrate the full life of `POST /orders` from a phone in Delhi to a service in us-east — every hop, every handshake, where TLS ends, where state lives. 5 minutes, no notes. This is decomposition practice disguised as networking.

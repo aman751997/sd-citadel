@@ -1,0 +1,110 @@
+---
+title: 'Pattern: Geospatial Indexing'
+description: 'Why "find nearby X" breaks normal indexes, and the three structures — geohash, quadtree, H3 — that fix it.'
+module: 7
+order: 1
+minutes: 25
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The pattern in one sentence
+
+"Find things near me" cannot be answered by B-tree indexes on lat/lon — you need a structure that makes **2D proximity into 1D adjacency**, and there are three standard ones.
+
+**Trigger words:** "nearby", "within X km", "closest drivers", "in this map area", "location-based".
+
+## Why the naive query dies
+
+```sql
+WHERE lat BETWEEN 12.9 AND 13.1 AND lon BETWEEN 77.5 AND 77.7
+```
+
+An index on `lat` narrows to a horizontal band of the whole planet — every restaurant between those latitudes, on every continent. The `lon` filter then scans that band. Two separate 1D indexes can't answer a 2D question efficiently. Say this failure first in interviews; the fix lands harder after it.
+
+## Geohash — the workhorse
+
+Recursively halve the world, interleaving longitude/latitude bits; encode as a string. The magic property: **shared prefix ≈ nearby** — `tdr1w`, `tdr1x` are neighboring ~5km cells.
+
+Now proximity is a **string prefix query** — plain B-trees and Redis handle it:
+
+```sql
+WHERE geohash LIKE 'tdr1%'   -- everything in this ~5km cell
+```
+
+Precision by prefix length: 4 chars ≈ 39 km cell · 5 ≈ 5 km · 6 ≈ 1.2 km · 7 ≈ 150 m.
+
+**The edge caveat (always say it):** two points can be meters apart across a cell boundary with different prefixes. Standard fix: query the cell **plus its 8 neighbors**, then exact-distance filter the candidates. Nine prefix queries, cheap, correct.
+
+## Quadtree and H3 — when to name them
+
+<Mermaid code={`flowchart TD
+    W["world cell"] --> A["sparse area:\nstop subdividing\n(big cell, few points)"]
+    W --> B["dense city cell:\nsubdivide again"]
+    B --> B1["…"] 
+    B --> B2["dense downtown:\nsubdivide deeper"]`} />
+
+- **Quadtree** — subdivide cells *only where data is dense*: adaptive resolution. NYC gets deep small cells, Nevada stays one big cell. In-memory structure; right answer when density varies wildly and you're building the index service yourself (Yelp at scale).
+- **H3 (Uber's hexagons)** — fixed hierarchical hex grid. Hexagons have uniform neighbor distances (squares' diagonal neighbors are √2 farther) — better for coverage/supply-demand math like surge pricing. Name it in any Uber-flavored question; it's literally their library.
+- **Geohash** — default otherwise: dead simple, works in Redis (`GEOSEARCH` uses it internally) or any DB with a string index.
+
+One more honest option: **PostGIS** — "for moderate scale, Postgres with a GiST spatial index just answers this; custom infra starts when we outgrow it." Knowing when NOT to build is senior signal.
+
+## Static vs moving objects — the real design split
+
+**Static (restaurants, stores):** index rows in DB/ES by geohash; standard read path; cache popular cells (caching lesson: key = `geo:{cell}:restaurants`, TTL minutes, delete-on-write when a listing changes).
+
+**Moving (drivers, couriers):** updates every ~4 seconds. Writing 1M drivers × every 4s into a disk index = 250K writes/s of churn — wrong tool. Instead: **in-memory grid** — Redis geo sets (or an in-process map) keyed by cell, driver moves = remove from old cell set, add to new. Estimation reflex: 1M drivers × ~50 B ≈ 50 MB — trivially in-memory (capacity), cluster for throughput/availability (the distinction from the caching lesson, reused).
+
+Matching (Uber): rider requests → query rider's cell + neighbors for candidate drivers → rank by ETA → offer with a **short hold + TTL** so two riders don't get the same driver — which is the contention pattern meeting this one. Cross-pattern joints like this are where senior answers live.
+
+## Questions this pattern unlocks
+
+| Bank question | How the pattern applies |
+|---------------|------------------------|
+| **Yelp / nearby search** (walkthrough) | static objects: geohash/PostGIS index + cell caching + ratings join |
+| **Uber** (walkthrough) | moving objects: in-memory geo grid + realtime location stream (WS) + match-with-hold (contention) |
+| **DoorDash** | Uber's shape + restaurant prep-time in the ranking |
+| **Tinder** | geo filter first, then preference filter, swipe state separate |
+| **Google Maps routing** | different problem (graph shortest-path, A*, contraction hierarchies) — know to SAY it's not a proximity index question |
+| **Strava heatmaps** | geo + time-series aggregation (next patterns) |
+
+<Quiz questions={[
+  {
+    q: 'Why can\'t separate B-tree indexes on lat and lon answer "restaurants within 2km" efficiently?',
+    options: [
+      'Floating-point comparison is slow',
+      'Each index narrows one dimension only — the lat index returns a planet-wide horizontal band; intersecting with lon still scans huge irrelevant sets. 2D proximity needs a structure encoding both dimensions together',
+      'B-trees cannot store coordinates',
+      'It works fine — this is a premature optimization'
+    ],
+    answer: 1,
+    why: 'The dimensional mismatch is the pattern\'s entire reason to exist. Being able to articulate WHY the naive approach fails is worth as much as knowing geohash.'
+  },
+  {
+    q: 'Your geohash query returns no drivers, but one is 200m away. What happened?',
+    options: [
+      'The geohash precision is too coarse',
+      'The driver is across a cell boundary — nearby points can have different prefixes. Standard fix: query the cell + 8 neighbors, then exact-distance filter',
+      'The driver\'s location update was lost',
+      'Geohashes don\'t work near the equator'
+    ],
+    answer: 1,
+    why: 'The boundary problem is THE geohash follow-up question. The +8-neighbors answer should be attached to geohash in your head as one unit.'
+  },
+  {
+    q: '1M drivers send locations every 4s. Where does this data live?',
+    options: [
+      'Postgres with a geohash column, indexed',
+      'An in-memory geo grid (e.g. Redis geo sets per cell) — 250K updates/s of pure churn with only the LATEST position mattering is wrong for disk indexes; ~50MB fits memory trivially',
+      'Elasticsearch with geo_point mapping',
+      'Kafka, queried by consumers'
+    ],
+    answer: 1,
+    why: 'Ephemeral, hot, latest-only data = memory. The estimation (50MB!) is what licenses the answer — compute it out loud. Disk indexes (1, 3) burn IO maintaining history nobody reads; Kafka (4) is a pipe, not a queryable index.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: 12-minute mini-design — "find nearby EV charging stations, with live availability." Static geo index + a moving-ish availability layer + cell caching: three lessons in one rep. Then weekend mock: **Yelp** or **Uber**.

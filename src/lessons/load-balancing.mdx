@@ -1,0 +1,95 @@
+---
+title: 'Load Balancers & API Gateways'
+description: 'L4 vs L7, health checks, and the gateway box that starts every diagram — what it actually does and when it becomes interesting.'
+module: 2
+order: 4
+minutes: 20
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The most-drawn, least-explained box
+
+Every design starts `client → LB → servers`. Interviewers let it slide until they don't: "what does your load balancer actually do?" This lesson is that answer, plus the gateway distinction.
+
+## L4 vs L7 — the core distinction
+
+| | **L4 (transport)** | **L7 (application)** |
+|--|-------------------|---------------------|
+| Sees | IPs and ports, TCP packets | full HTTP: path, headers, cookies |
+| Can do | spread connections | route `/video/*` vs `/api/*`, terminate TLS, retry, rate limit |
+| Speed | extremely fast, dumb | slower per request, smart |
+| Example | AWS NLB | AWS ALB, nginx, Envoy |
+
+Interview default: **L7 at the edge** (you almost always want path routing + TLS termination), L4 only when you need raw throughput/protocol transparency (millions of persistent WebSocket connections, non-HTTP traffic, gaming/VoIP).
+
+## Balancing algorithms — know three, defend one
+
+- **Round robin** — rotate through servers. Fine when requests cost roughly the same.
+- **Least connections** — send to the least-busy server. Better when request costs vary wildly (some requests take 10ms, some 10s).
+- **Consistent hashing on a key** — same key → same server. You pick this *on purpose* when servers hold per-key state: WebSocket connection servers, local caches (pairs with the hot-key L1 story), game sessions.
+
+Defend by workload: "requests are uniform CRUD → round robin; long-lived uneven work → least connections; server-local state → consistent hash on user_id."
+
+## Health checks — how the LB knows a server died
+
+The LB probes each server (`GET /health` every few seconds); fail N consecutive → stop routing to it; pass again → back in the pool. Two interview-worthy subtleties:
+
+- **Shallow vs deep checks.** Shallow ("process is up") can pass while the server's DB connection is dead — traffic routes into a black hole. Deep ("can I touch my dependencies?") is honest but can cascade: DB blips → ALL servers fail checks → LB has nobody to route to → total outage from a partial problem. Common answer: shallow checks for the LB, deep checks for alerting.
+- Health checks + stateless servers = **self-healing and rolling deploys**: drain a server (stop sending new requests, let in-flight finish), replace it, repeat. Zero downtime without any cleverness.
+
+## Where the LB itself fails
+
+"Isn't the LB a single point of failure?" — the standard follow-up. Answer: LB pairs with failover (a standby takes over the same IP/VIP), or DNS-level spreading across multiple LB IPs, and at planet scale, **anycast** (same IP announced from many locations; the network routes you to the nearest). One sentence of this is plenty — it shows you know the box isn't magic.
+
+## API Gateway — the LB's smarter sibling
+
+<Mermaid code={`flowchart LR
+    C["clients"] --> GW["API Gateway\n· authN (validate JWT)\n· rate limiting\n· routing to services\n· circuit breaking\n· request logging"]
+    GW --> S1["user svc"]
+    GW --> S2["order svc"]
+    GW --> S3["media svc"]`} />
+
+A gateway is an L7 proxy that also owns **cross-cutting API concerns**: authenticate the token once at the edge (services trust the gateway's verdict), enforce rate limits (your rate limiter walkthrough lives here), route to microservices, **circuit-break** (stop hammering a failing downstream — fail fast, recover probe later), log/trace everything.
+
+When to draw which: monolith or single service → "LB" is enough. Microservices + public API → draw a gateway and say two of its jobs out loud. Don't draw both a gateway AND a separate LB per service unless asked about scale — box inflation without justification is a known interview smell (every box earns its sentence).
+
+<Quiz questions={[
+  {
+    q: 'A million mobile clients hold persistent WebSocket connections. L4 or L7 in front, and why?',
+    options: [
+      'L7 — WebSockets are HTTP-upgraded so you need HTTP awareness',
+      'L4 (or L7 with consistent hashing) — the job is spreading and PINNING long-lived connections cheaply; per-request smarts buy little when there is one "request" per hours-long connection',
+      'No LB — DNS round robin is enough',
+      'L7 with least-connections re-balancing every message'
+    ],
+    answer: 1,
+    why: 'Long-lived connections flip the tradeoff: routing smarts matter once (at connect), throughput matters always. Re-balancing per message (option 4) would break connection affinity entirely.'
+  },
+  {
+    q: 'Deep health checks (server verifies its DB connection) caused a full outage during a 5-second DB blip. Why?',
+    options: [
+      'The DB blip was actually a full outage',
+      'All servers failed their checks simultaneously, so the LB removed every server from the pool — a partial dependency problem became total unavailability',
+      'Health checks overloaded the DB',
+      'The LB should have used round robin'
+    ],
+    answer: 1,
+    why: 'The correlated-failure trap: dependency-aware checks make every server\'s health track the dependency. Standard fix: shallow checks for routing, deep checks for alerts only.'
+  },
+  {
+    q: 'Order service is timing out under load. Without a circuit breaker, what happens to callers? With one?',
+    options: [
+      'Without: callers fail fast. With: callers retry harder',
+      'Without: caller threads pile up waiting on timeouts and the failure cascades upstream. With: after N failures the breaker opens — callers fail fast/degrade, occasional probes test recovery',
+      'The circuit breaker restarts the order service',
+      'No difference if timeouts are configured'
+    ],
+    answer: 1,
+    why: 'Circuit breaking is about protecting the CALLER (thread pools, latency budgets) and the struggling service (no retry storm). "Fail fast, probe later" is the whole pattern in four words.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: your next mock's high-level phase must include one sentence justifying the LB/gateway box ("L7 gateway: TLS termination, JWT check, per-key rate limits") — practicing the every-box-earns-its-place habit on the box everyone forgets.

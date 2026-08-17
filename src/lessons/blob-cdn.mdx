@@ -1,0 +1,102 @@
+---
+title: 'Blob Storage & CDNs'
+description: 'Where the big bytes live — S3, presigned URLs, chunking, dedup, and the CDN layer that keeps them off your servers.'
+module: 2
+order: 5
+minutes: 25
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The rule that reshapes every media design
+
+**Big bytes never flow through your app servers.** Photos, videos, files, backups — they live in blob storage (S3), travel via CDN, and your services only ever handle *metadata about them*. The moment a design streams a 2 GB video through an app server, the interview is going badly.
+
+## Blob storage in one table
+
+| Property | Meaning for your design |
+|----------|------------------------|
+| Key → bytes | no queries, no indexes — you always fetch by exact key |
+| Practically infinite, cheap | never estimate yourself out of S3; estimate to pick *storage class* |
+| 11 nines durability via replication/erasure coding | "durability is S3's problem" — one sentence, move on |
+| HTTP access | clients can talk to it DIRECTLY — the key insight below |
+
+**The metadata split** — the pattern every file/media design uses: blob in S3 under a key, row in your DB with `{id, owner, s3_key, size, content_hash, created_at}`. The DB answers every question ("list my files"); S3 only ever serves bytes.
+
+## Presigned URLs — clients talk to S3 directly
+
+<Mermaid code={`sequenceDiagram
+    participant C as Client
+    participant API as Your API
+    participant S3 as S3
+    C->>API: "I want to upload photo.jpg (8MB)"
+    API->>API: authorize, create metadata row (status: pending)
+    API-->>C: presigned PUT URL (expires 15 min)
+    C->>S3: PUT bytes directly (your servers never see them)
+    S3-->>API: event: upload complete
+    API->>API: mark metadata row active`} />
+
+A presigned URL is a time-limited, signed permission slip for one exact operation on one exact key. Uploads AND downloads both use them: your API does auth + metadata, S3 does bytes. Say the flow with the completion event — the "pending → active" state transition is what separates people who've built this from people who've read about it.
+
+## Chunking — big files go in pieces
+
+Upload a 2 GB file as one PUT and a network blip at 99% restarts everything. So: split into chunks (5–10 MB), upload independently (parallel, resumable — only failed chunks retry), reassemble by manifest. This is S3 multipart upload, and it's also the foundation of Dropbox-style sync:
+
+- **Content-hash each chunk** (SHA-256) → the chunk's identity.
+- **Dedup**: chunk already stored (same hash, any user)? Don't store it again — just reference it.
+- **Delta sync**: file edited → only chunks whose hashes changed get uploaded. A 1-line edit to a 1 GB file ships a few MB.
+
+That triplet (chunk, hash, dedup) is the entire heart of the Dropbox walkthrough later.
+
+## CDN — the cache with a thousand locations
+
+A CDN is a geographically distributed **cache for HTTP responses**, so it inherits the whole caching lesson: keys (the URL), TTLs, invalidation. Origin = S3 or your servers; edge = hundreds of POPs near users.
+
+- **Pull CDN** (default): edge misses → fetches from origin → caches per `Cache-Control` TTL.
+- **The invalidation trick — immutable URLs**: purging CDN caches is slow and unreliable, so don't update content — publish new content at a new URL. `avatar_v2.jpg`, `app.9f3ab2.js` (content-hashed filenames), `Cache-Control: immutable, max-age=1yr`. Deploy = new URLs, old ones die by TTL. This is how every serious frontend ships.
+- **What to CDN**: static assets always; video segments always (YouTube's real serving layer is "CDN with a transcoding pipeline behind it"); API responses rarely (per-user + auth makes them uncacheable — say this when asked).
+- **Signed CDN URLs/cookies**: private content (paid course videos) still needs auth at the edge — same presigning idea, CDN edition.
+
+## Bandwidth estimation reflex (from the estimation lesson)
+
+Media designs are where the bandwidth axis stops being "ignore it": 1M video views/day × 100 MB average = 100 TB/day egress ≈ 1.2 GB/s average, ×3 peak. Conclusion sentence: "that's CDN territory — origin serves each segment once per edge, users pull from edges." The estimate exists to justify the CDN box.
+
+<Quiz questions={[
+  {
+    q: 'Interviewer: "Walk me through a user uploading a 50 MB video." Which is the strong shape?',
+    options: [
+      'Client POSTs the file to our API, API streams it to S3',
+      'Client asks our API, gets a presigned multipart URL, uploads chunks directly to S3 in parallel; S3 completion event flips our metadata row from pending to active',
+      'Client uploads to the CDN, CDN forwards to S3',
+      'Client uploads to the nearest app server which chunks it server-side'
+    ],
+    answer: 1,
+    why: 'Bytes bypass your servers (rule #1), chunks give resumability, the pending→active event closes the loop. Option 1 melts app servers at scale; CDNs (option 3) serve reads, not uploads (mostly).'
+  },
+  {
+    q: 'Two users upload the same 500 MB file. Your Dropbox-style design stores how much, and how does it know?',
+    options: [
+      '1 GB — separate users, separate storage for isolation',
+      '~500 MB — chunks are content-hashed; the second upload\'s hashes all match existing chunks, so only references are created',
+      '~500 MB — S3 automatically deduplicates identical objects',
+      '1 GB — dedup across users is a privacy violation'
+    ],
+    answer: 1,
+    why: 'Content-addressed chunks make dedup nearly free — the client sends hashes first, the server answers "I already have 3 of these 100, send the rest." S3 does NOT dedup for you (option 3).'
+  },
+  {
+    q: 'You deployed new JS but users still get the old version from the CDN. The senior prevention (not fix)?',
+    options: [
+      'Purge the CDN cache on every deploy',
+      'Set TTL to 60 seconds on all assets',
+      'Content-hashed filenames (app.9f3ab2.js) + immutable long TTLs — a deploy publishes NEW URLs, so there is nothing to invalidate, ever',
+      'Serve JS from the origin, CDN only for images'
+    ],
+    answer: 2,
+    why: 'Immutable-URL versioning designs the invalidation problem out of existence. Purging (1) is slow/unreliable per-POP; short TTLs (2) throw away most of the CDN\'s value.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: 8-minute mini-design — "profile picture upload + serving at Instagram scale." Must include: presigned upload, metadata row states, CDN with immutable URLs, and the bandwidth estimate that justifies the CDN. Every component in one breath each.

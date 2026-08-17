@@ -1,0 +1,96 @@
+---
+title: 'AI-Era: LLM Inference Serving'
+description: 'Why serving LLMs breaks normal web-service intuition — GPU batching, KV cache, token streaming, and the new meaning of rate limiting.'
+module: 12
+order: 1
+minutes: 30
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## Why this question exists (and why you have an edge)
+
+"Design ChatGPT's serving layer" is the new Tier-5 favorite (Microsoft, Amazon, OpenAI, Anthropic, Google all ask it). Most candidates apply web-service intuition and die, because LLM inference violates three assumptions: requests are **seconds-to-minutes long**, the bottleneck is **GPU memory**, not CPU/IO, and output arrives **incrementally**. You integrate LLMs at work — this lesson turns that into interview vocabulary.
+
+## The shape of one request
+
+Two phases with different economics:
+
+1. **Prefill** — the whole prompt processes in parallel (compute-bound, fast per token).
+2. **Decode** — output generates **one token at a time**, each step needing all previous context (memory-bandwidth-bound, the long tail).
+
+The state that makes decode possible is the **KV cache**: attention keys/values for every token so far, kept in GPU memory. Rule-of-thumb numbers to say: for a mid-size model it's **~100s of KB–MB per token**, so a 32K-token context can hold **gigabytes per request** — GPU RAM, not compute, caps concurrency. That single fact drives the whole design.
+
+## Batching — the throughput lever
+
+GPUs are efficient at big matrix ops; serving one request at a time wastes 90%+ of the hardware. But naive (static) batching — wait, collect 16 requests, run them together — forces short answers to wait for the batch's longest answer.
+
+**Continuous batching** (vLLM's core idea, the expected answer): the batch is rebuilt **every decode step** — a finished request exits immediately, a queued one joins mid-flight. Throughput of batching, latency close to solo serving. Name it, explain it in one sentence, done.
+
+<Mermaid code={`flowchart LR
+    Q["request queue"] --> S["scheduler\n(admission by\nfree KV memory)"]
+    S --> G1["GPU worker:\ncontinuous batch\n[req A step 41 | req B step 3 | req C prefill]"]
+    G1 -->|"token by token"| ST["SSE stream out"]
+    G1 -->|"req done → slot frees\nnext request joins"| S`} />
+
+Admission control follows: the scheduler admits requests based on **projected KV memory** (prompt length + max output), not request count. "Our concurrency limit is a memory budget, not a QPS number" — that sentence is the senior signal of the whole question.
+
+## Streaming — SSE, and why UX defines the SLO
+
+Users can't wait 30s for a full answer, so tokens stream as generated — **SSE** (realtime lesson: one-way push = SSE, not WebSockets). The latency metrics change too: **TTFT** (time to first token — dominated by queue wait + prefill; the UX-critical one) and **inter-token latency** (steady decode rhythm). Say TTFT, not p99-of-total — total time mostly measures answer length.
+
+## The classic exam followups
+
+- **Multi-GPU:** model doesn't fit one GPU → **tensor parallelism** (split each layer across GPUs, chatty, within one node) and **pipeline parallelism** (split by layers, stage-to-stage, across nodes). One sentence each suffices.
+- **Prefix caching:** many requests share long prefixes (system prompts, few-shot examples, chat history) — cache those KV blocks and reuse across requests. Huge TTFT win for chat products; connects to your prompt-caching knowledge from work.
+- **Rate limiting is token-budget, not request-count** — one request can cost 100× another. Limit **tokens/minute per tenant** (the rate-limiter walkthrough's token bucket, literally refilling with LLM tokens), plus a max-concurrent-streams cap.
+- **Model fleet:** requests routed by model; small-model fallback under load or for easy queries (gateway lesson, next-next). GPU autoscaling is slow (model load = minutes) → keep warm pools, scale on queue depth + TTFT, not CPU.
+
+## Questions this unlocks
+
+| Bank question | How it applies |
+|---------------|----------------|
+| **ChatGPT serving** (this walkthrough-grade lesson) | the whole thing |
+| **LLM gateway / agent platform** | this is the backend the gateway routes to |
+| **RAG** | inference is the last, slowest hop — its latency budget shapes the retrieval design |
+| **"Add AI to product X"** | any product question + a paragraph of this = differentiated answer |
+
+<Quiz questions={[
+  {
+    q: 'What actually caps how many concurrent chats one GPU serves?',
+    options: [
+      'CPU threads for tokenization',
+      'GPU FLOPS',
+      'GPU memory for KV caches — gigabytes per long-context request; admission control budgets memory, not request count',
+      'Network bandwidth for streaming'
+    ],
+    answer: 2,
+    why: 'Decode is memory-bound: every active request holds its full attention state resident. This is THE fact that separates people who understand LLM serving from people pattern-matching to web services.'
+  },
+  {
+    q: 'Static batching gives great GPU utilization but users complain short questions hang. Fix?',
+    options: [
+      'Smaller batches',
+      'Continuous batching — rebuild the batch every decode step; finished sequences exit instantly, queued ones join mid-flight',
+      'Separate queues for short and long prompts',
+      'More GPUs'
+    ],
+    answer: 1,
+    why: 'The vLLM answer, and the expected one. Option 3 is a real auxiliary tactic (and worth mentioning), but per-step batch reformation is the structural fix to convoy latency.'
+  },
+  {
+    q: 'Why is per-tenant rate limiting by requests/minute wrong for an LLM API?',
+    options: [
+      'Requests/minute is fine',
+      'Cost varies ~100× by token count — limit tokens/minute (a token bucket refilled with literal tokens) plus a concurrent-stream cap, since long streams hold GPU memory for minutes',
+      'LLM APIs cannot be rate limited mid-stream',
+      'Because billing is monthly'
+    ],
+    answer: 1,
+    why: 'Unit-of-cost thinking: limit the resource you actually spend. Bridges your rate-limiter walkthrough to the AI era — same bucket, different currency.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: 15-minute mini-mock — "your company's internal LLM API: 50 teams, one 70B model, 8 GPUs." Admission control, batching, streaming, token budgets, TTFT SLO. Your day job gives you the vocabulary — this rep makes it interview-shaped.

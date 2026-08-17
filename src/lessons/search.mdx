@@ -1,0 +1,107 @@
+---
+title: 'Search: Inverted Indexes, Elasticsearch, Typeahead'
+description: 'Why LIKE %term% dies at scale, how inverted indexes fix it, and the trie + top-K machinery behind sub-100ms autocomplete.'
+module: 2
+order: 6
+minutes: 25
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The moment search enters your design
+
+"Users can search posts" appears in half of all product designs. The trap: `WHERE text LIKE '%pizza%'` — a full table scan, no index can help a leading wildcard, dead at any scale. The fix is a different data structure entirely.
+
+## The inverted index
+
+A forward index maps document → words. An **inverted index** maps word → documents:
+
+```
+"pizza"  → [doc 4, doc 9, doc 151, ...]
+"best"   → [doc 2, doc 9, doc 77, ...]
+```
+
+Query "best pizza" = intersect the two lists → docs 9. Ranking (which doc first?) uses relevance scoring — for interviews, "TF-IDF/BM25: rarer terms and denser matches score higher" is one sentence and sufficient. Add recency/popularity as score components when the product wants trending content.
+
+At document write time, text is **analyzed**: lowercased, tokenized, stemmed ("running" → "run"). Writes are therefore more expensive — every indexed word gets a posting-list update. Classic tradeoff: search-read speed bought with index-write cost (same shape as DB indexes, bigger).
+
+## Elasticsearch in a design — the standard shape
+
+<Mermaid code={`flowchart LR
+    W["writes"] --> DB[(Primary DB\nsource of truth)]
+    DB -->|"CDC / event stream"| ES[(Elasticsearch\nsearch replica)]
+    Q["search queries"] --> ES
+    R["normal reads"] --> DB`} />
+
+Rules that make this senior-grade:
+
+- **ES is never the source of truth.** It's a *derived, rebuildable* replica of the DB, fed async (CDC/Kafka — your queues lesson). Lost ES cluster → reindex from the DB.
+- **Say the staleness**: async indexing = a new post is searchable after ~1–2 seconds. Almost always fine — say it's a known lag, don't let the interviewer discover it.
+- **Sharding by document**, query fans out to all shards, results merge. (Shard-by-term exists but hot terms create hot shards — one sentence if pushed on Twitter search.)
+
+## Typeahead — a different animal
+
+Autocomplete is NOT search. It's **prefix matching under a brutal latency budget** (&lt;100 ms total, per keystroke). Two components:
+
+**1. The trie** — a tree where each path spells a prefix:
+
+<Mermaid code={`flowchart TD
+    root(( )) --> c["c"]
+    c --> ca["ca"]
+    ca --> car["car ✓"]
+    ca --> cat["cat ✓"]
+    car --> care["care ✓"]
+    root --> d["d"]
+    d --> dog["...dog ✓"]`} />
+
+Walk to the prefix node → everything below it completes the prefix.
+
+**2. Top-K precomputation — the actual trick.** Walking the subtree at query time is too slow for hot prefixes. So: **store the top-K completions AT each node**, precomputed. Query = walk to node, return its cached list. O(prefix length) lookup, effectively O(1).
+
+The cost moved to writes: a search for "cardigan" should bump its rank in the top-K lists of `c`, `ca`, `car`... Doing that synchronously per search is insane — so **aggregate search logs offline** (batch/streaming job, hourly), rebuild the trie, swap it in. Typeahead freshness is hours, not milliseconds — say that tradeoff proudly, it's the correct one. (Sudden-trend freshness → a small real-time layer merged at query time, one sentence.)
+
+Serving: the trie is small enough to fit **in memory, replicated on every node** (estimate: top 1M queries × ~100 B ≈ 100 MB — trivial), or sharded by prefix range at Google scale. Cache full result lists for the hottest 1-3 char prefixes at the edge.
+
+## Fuzzy matching + the rest (one-liners)
+
+Typos → edit-distance candidates or n-gram indexing ("pizzza" still finds pizza). Geo+text ("pizza near me") → combined index, geospatial lesson. Bloom filter — "definitely not present / maybe present" in tiny memory — shows up for crawler dedup and cache-penetration defense; know the one-liner.
+
+<Quiz questions={[
+  {
+    q: 'Search is added to your feed design. Interviewer: "will you query Postgres with LIKE?" Strong answer:',
+    options: [
+      'Yes, with an index on the text column',
+      'No — leading-wildcard LIKE cannot use a B-tree index and scans the table. I would add an inverted index (Elasticsearch), fed asynchronously from the DB via CDC, searchable within ~2s',
+      'Yes for small scale, ES later',
+      'No — cache popular search results in Redis instead'
+    ],
+    answer: 1,
+    why: 'Names the exact failure (leading wildcard defeats B-trees), the fix, the sync mechanism, and the staleness bound. Option 3 is defensible ONLY with Postgres full-text search named explicitly — plain LIKE is never the answer.'
+  },
+  {
+    q: 'Why does typeahead store precomputed top-K completions at every trie node instead of walking the subtree per query?',
+    options: [
+      'Subtree walks give wrong results',
+      'The latency budget is per-keystroke <100ms; walking "a"\'s subtree touches millions of nodes. Precomputed top-K makes reads O(prefix) — the classic move: pay at (offline) write time, not read time',
+      'Tries cannot be traversed downward efficiently',
+      'To save memory'
+    ],
+    answer: 1,
+    why: 'Read-time work moved to precompute — the same trade as fan-out-on-write and materialized views. Recognizing it as a recurring PATTERN (not a trie fact) is the transferable skill.'
+  },
+  {
+    q: 'Your ES cluster is destroyed. What is the recovery story if the design was done right?',
+    options: [
+      'Restore from ES snapshots and accept some data loss',
+      'The search data is gone — rebuild what you can from logs',
+      'Reindex everything from the primary DB — ES was a derived replica, never the source of truth; search is degraded (not down) meanwhile',
+      'Failover to a standby ES cluster, which is mandatory'
+    ],
+    answer: 2,
+    why: '"Derived and rebuildable" is the design property that makes losing ES an inconvenience instead of an incident. Snapshots/standbys are optimizations on top, not the story.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: 10-minute mini-design — typeahead for an e-commerce search box: trie + top-K, the offline aggregation loop, memory estimate for 1M products, and where the 100ms budget goes (edge cache? replica per region?). This is bank question "Typeahead" — a real Tier-1 interview question, done small.

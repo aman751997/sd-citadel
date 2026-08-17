@@ -1,0 +1,102 @@
+---
+title: 'Pattern: Async Jobs & Pipelines'
+description: 'The queue + workers + status template behind transcoding, crawling, notifications, and every "this takes too long for a request" problem.'
+module: 8
+order: 1
+minutes: 30
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The pattern in one sentence
+
+Work that can't finish inside a request (too slow, too big, too flaky, or triggered by schedule) becomes a **job**: persisted, queued, executed by scalable workers, tracked by status — and every long-running feature in every design is this one template re-skinned.
+
+**Trigger words:** "process the video", "generate a report", "send to all", "crawl", "index", "run nightly", "it can take minutes".
+
+## The template
+
+<Mermaid code={`flowchart LR
+    U["request"] --> API["API: validate,\ncreate job row (queued),\nenqueue job ID"]
+    API -->|"202 + job_id, instantly"| U
+    API --> Q[("queue")]
+    Q --> W["worker pool\n(scales on queue depth)"]
+    W --> X["do the work\n(idempotent!)"]
+    W --> J[("job store:\nqueued → running →\ndone | failed")]
+    U -.->|"poll GET /jobs/{id}\nor push via SSE"| J`} />
+
+Speak it in this order — each numbered piece is a sentence:
+
+1. **Persist the job first, then enqueue the ID.** The DB row is truth; the queue is a delivery mechanism. (Queue message lost → a reconciler re-enqueues rows stuck in `queued`. Queue-only jobs vanish silently.)
+2. **Return `202 + job_id` immediately.** The user experience of async is "accepted, here's your tracking number."
+3. **Workers pull, do, update status.** Stateless, scaled on **queue depth** (the autoscaling metric — say it).
+4. **Status flows back** — polling `GET /jobs/{id}` is fine (realtime lesson: poll when you can); SSE/WS for progress bars.
+5. **Failures are the design**: retries with exponential backoff + jitter, then **DLQ + alert** (queues lesson). Worker crashes mid-job → lease/visibility timeout returns the job to the queue → someone else retries → therefore **the work must be idempotent** (contention lesson: dedupe key or naturally idempotent writes).
+
+That last chain — *crash → redelivery → idempotency* — is the pattern's core insight and the follow-up every interviewer runs.
+
+## Pipelines — jobs that make jobs
+
+Real work is often staged: video upload → split → transcode each chunk × each resolution → thumbnail → manifest → publish. Chain the template: each stage consumes from its queue and produces to the next, with the job store tracking a **state machine per item** (`uploaded → transcoding → packaged → live`).
+
+Why stages beat one mega-job: independent scaling (transcode needs 50 workers, thumbnails need 2), independent retry (a failed thumbnail doesn't redo the transcode), parallelism inside a stage (4K transcode = many chunk-jobs fanned out and joined). "Fan out chunks, join on completion counter" — a Redis atomic decrement hitting zero triggers the next stage — is the standard join answer.
+
+## Scheduled jobs — the scheduler's two problems
+
+"Run this at 9am daily" adds two hard sub-problems on top of the template:
+
+- **Firing on time at scale:** don't poll the whole jobs table every second. Standard: a **due-time index** queried each tick (`WHERE next_run <= now LIMIT batch`), or a delay-queue / timing-wheel. Fine-grained answer only if pushed.
+- **Firing exactly once when the scheduler is replicated:** two scheduler nodes must not both fire the 9am job. This is contention: **lease on the job** (lock + TTL + heartbeat) or partition the job space so each node owns a slice. Plus idempotent execution as the backstop — belt and suspenders, name both layers.
+
+This is why "design a distributed job scheduler" is a Tier-4 question: it's this pattern + contention + the queues lesson composed. You already own all three pieces.
+
+## Questions this pattern unlocks
+
+| Bank question | How the pattern applies |
+|---------------|------------------------|
+| **YouTube** (walkthrough) | the canonical pipeline: upload → chunk transcode fan-out/join → CDN publish |
+| **Web crawler** (walkthrough) | self-feeding pipeline — workers produce new jobs (URLs) into their own frontier queue + politeness rate limits + Bloom dedup |
+| **Notification system** (walkthrough) | fan-out (feeds pattern) into per-channel pipelines with retry/DLQ per provider |
+| **Job scheduler** (walkthrough) | the template + due-time firing + lease-based exactly-once |
+| **LeetCode judge** | jobs into sandboxed workers (containers), per-user quotas, status via poll |
+| **Report generation / data export** | the template verbatim — the most common "boring" interview add-on |
+
+<Quiz questions={[
+  {
+    q: 'Why persist the job row BEFORE enqueueing, rather than only sending to the queue?',
+    options: [
+      'Queues are slower than databases',
+      'The DB row is durable truth — if the enqueue fails or the message is lost, a reconciler re-enqueues stuck rows; queue-only jobs vanish with no record they existed',
+      'To generate the job ID',
+      'Compliance requires DB records'
+    ],
+    answer: 1,
+    why: 'DB-first + reconciliation gives at-least-once end-to-end even across queue failures. (The reverse order has a hole: enqueued, DB write fails → a worker processes a job that officially does not exist.)'
+  },
+  {
+    q: 'A worker crashes 80% through transcoding job 42. What is the recovery chain?',
+    options: [
+      'The job is failed — notify the user to retry',
+      'Lease/visibility timeout expires → job returns to queue → another worker runs it FROM THE START → which is safe only because the work is idempotent (output written to a deterministic key, atomic completion marker)',
+      'A monitor service resumes at 80%',
+      'The worker\'s replacement inherits its memory state'
+    ],
+    answer: 1,
+    why: 'Crash → redelivery → idempotency is THE chain. Resume-at-80% (option 3) requires checkpointing you almost never need — restart-safely is simpler and standard. Options 1 and 4 aren\'t how distributed workers work.'
+  },
+  {
+    q: 'Two replicated scheduler nodes both see "9am job due." Prevent double-firing:',
+    options: [
+      'Run only one scheduler node',
+      'A lease per firing (lock + TTL + heartbeat, or partitioned job ownership) — and idempotent job execution as the backstop when the lease dance fails anyway',
+      'Fire twice, deduplicate in analytics later',
+      'NTP-synchronized clocks so both fire simultaneously'
+    ],
+    answer: 1,
+    why: 'Two layers: coordination to make double-firing rare, idempotency to make it harmless. One scheduler node (option 1) trades correctness for availability — say WHY you rejected it, and you\'ve had the whole senior conversation.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: 12-minute mini-design — "user requests a PDF export of a year of data (takes ~2 min)." Full template out loud: job row, 202, workers, status endpoint, retry story, idempotency. This template is the highest-reuse 12 minutes in your whole prep. Weekend mock: **YouTube** or **web crawler**.

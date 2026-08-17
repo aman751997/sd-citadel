@@ -1,0 +1,106 @@
+---
+title: 'Pattern: Sync & Collaboration — Conflicts, OT, CRDTs'
+description: 'Two people changed the same thing while offline — from Dropbox file conflicts to Google Docs live editing, the escalation ladder of answers.'
+module: 11
+order: 1
+minutes: 30
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The pattern in one sentence
+
+Multiple devices hold **copies** of shared state, edit them independently (offline, concurrently), and the system must reconcile divergent copies — the answer escalates from "detect and punt" to "merge automatically," and knowing *which rung the product needs* is the whole game.
+
+**Trigger words:** "sync across devices", "offline edits", "collaborative", "both users edited", "conflict".
+
+## Rung 1 — Detect and punt (Dropbox files)
+
+For opaque files, don't be clever. Use **version vectors** (or a simple per-file version counter): client says "I'm editing version 7"; if the server is already on 8, that's a **conflict** — and Dropbox's famously right answer is to *punt*: keep both, name one `file (conflicted copy)`, let the human decide. Merging binary files automatically destroys data. **Saying "I will not auto-merge here" is a senior answer**, not a cop-out.
+
+The sync machinery around it (blob lesson does the details): chunk + hash files, upload changed chunks, notify other devices (realtime lesson — long-poll/WS), they pull the delta.
+
+## Rung 2 — Last-writer-wins and its lie
+
+LWW = timestamp each write, latest wins. Cheap, built into Dynamo-style stores, and **silently loses data** — the "loser" write vanishes without anyone deciding that. Acceptable for: presence, cursor position, a settings toggle — data where the newest value genuinely supersedes. Unacceptable for: documents, carts, counters. Also: distributed clocks skew, so "last" is partly fiction. Use the phrase "LWW is acceptable here *because losing the older write is the correct product behavior*" — or don't use LWW.
+
+## Rung 3 — OT: transform concurrent edits (Google Docs classic)
+
+Live text editing can't punt (conflicts every second) and can't LWW (loses keystrokes). **Operational Transformation**: represent edits as operations (`insert("x", pos 5)`), and when two ops race, **transform** one against the other so both converge:
+
+<Mermaid code={`sequenceDiagram
+    participant A as Alice
+    participant S as Server (sequencer)
+    participant B as Bob
+    Note over A,B: doc: "cat" — concurrent edits
+    A->>S: insert("s", pos 3) → "cats"
+    B->>S: insert("b", pos 0) → "bcat"
+    S->>S: order: Bob first. Transform Alice's op:\npos 3 → pos 4 (shifted by Bob's insert)
+    S-->>A: apply insert("b",0) → "bcats"
+    S-->>B: apply insert("s",4) → "bcats"
+    Note over A,B: both converge to "bcats" ✅`} />
+
+The architecture consequence interviewers probe: OT needs a **central server per document** to sequence operations. That's fine (a doc has few concurrent editors — this is NOT a horizontal-scale problem; it's a per-doc-session one) and it gives you the op log for free = **version history**. Shard doc-sessions across servers by `doc_id` (consistent hashing — patterns compose), cursors/presence broadcast over the doc's WS room (realtime lesson).
+
+## Rung 4 — CRDTs: merge without a sequencer
+
+**Conflict-free Replicated Data Types**: data structures whose merge is mathematically commutative — any replicas, merging in any order, converge without coordination. Examples: a grow-only counter (per-node counts, merge = element-wise max), an add/remove set with tombstones, sequence CRDTs for text (each character gets a stable unique ID between its neighbors — position-shifting, OT's hard part, disappears).
+
+| | OT | CRDT |
+|--|----|------|
+| Coordination | central sequencer per doc | none — peer-to-peer, offline-first |
+| Complexity | transform functions (fiddly, well-trodden) | metadata overhead (IDs/tombstones grow) |
+| Used by | Google Docs | Figma-style apps, Riak, collaborative offline-first apps |
+
+Interview verdict to give: "Docs-style with a server anyway → OT is proven and the server doubles as history. Offline-first or peer-to-peer → CRDTs. I'd start OT." Naming both + choosing beats deep internals of either.
+
+## Questions this pattern unlocks
+
+| Bank question | How the pattern applies |
+|---------------|------------------------|
+| **Dropbox** (walkthrough) | rung 1: version vectors + conflicted copies + chunk delta sync |
+| **Google Docs** (walkthrough) | rung 3: OT + sequencer + WS rooms + op-log history |
+| **Google Calendar** | mostly rung 1/2 per-field: events are structured rows — field-level LWW + invite-state machine |
+| **Figma-like canvas** | CRDT per object property (LWW-per-property is honest here — newest position wins) |
+| **Collaborative cart / notes** | small CRDTs (add-wins set) or server-serialized ops — say scale doesn't demand cleverness |
+| **Offline-first mobile apps** | queue local ops, replay on reconnect, resolve by rung 1–4 per data type |
+
+<Quiz questions={[
+  {
+    q: 'Two devices edited the same spreadsheet FILE offline (Dropbox-style, file is opaque bytes). Correct handling?',
+    options: [
+      'Merge the binary diffs automatically',
+      'Last-writer-wins by upload time',
+      'Detect via version mismatch, keep BOTH as original + conflicted copy — auto-merging opaque bytes or silently dropping one edit both destroy user data',
+      'Lock files while any device is offline'
+    ],
+    answer: 2,
+    why: 'Rung 1 is correct for opaque content. LWW (option 2) silently deletes someone\'s afternoon of work. Option 4 makes offline editing impossible — the feature\'s whole point.'
+  },
+  {
+    q: 'Why does OT require a central sequencer, and why is that NOT a scaling problem?',
+    options: [
+      'It is a scaling problem — CRDTs are always better',
+      'Transforms need a canonical op order to converge; and load is bounded per document (few concurrent editors), so doc-sessions shard cleanly across servers by doc_id',
+      'The sequencer is only for permissions',
+      'Google runs one global sequencer for all docs'
+    ],
+    answer: 1,
+    why: 'Per-entity coordination (one doc) ≠ global coordination. Spotting that a "central" component is fine because its scope is naturally sharded is a recurring senior insight — same as per-symbol matching engines in exchanges.'
+  },
+  {
+    q: 'When is LWW an honest answer rather than silent data loss?',
+    options: [
+      'Whenever writes are timestamped accurately',
+      'When the newest value genuinely supersedes by product definition — cursor position, presence, a toggle — and you SAY that losing older writes is intended',
+      'Never — LWW is always wrong',
+      'When clocks are NTP-synchronized'
+    ],
+    answer: 1,
+    why: 'LWW is a product statement wearing a technical costume. The failure mode isn\'t the mechanism, it\'s using it on data where both writes mattered.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: the escalation drill — 6 data types (file, doc text, cursor, cart, calendar event, canvas object), you assign each a rung + one-line justification, 60 seconds each. Weekend mock: **Dropbox** (rung 1 + blob lesson) or **Google Docs** (rung 3) — the pattern's two walkthroughs.

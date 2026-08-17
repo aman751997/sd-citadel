@@ -1,0 +1,127 @@
+---
+title: 'Pattern: Contention — Locks, Idempotency, Exactly-Once'
+description: 'When two requests want the same thing at once — bookings, payments, inventory — and the toolkit that keeps them honest.'
+module: 6
+order: 1
+minutes: 35
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The pattern in one sentence
+
+Multiple concurrent actors compete to mutate the same scarce resource — the last seat, the same ₹500, one job — and your design must guarantee it happens **once, to one winner**, under retries, crashes, and races.
+
+**Trigger words:** "book", "reserve", "purchase", "only one", "inventory", "double-charge", "flash sale", "run this job exactly once". The moment money or scarce inventory appears, this pattern IS the deep dive — walk in ready.
+
+## Tool 1 — Atomic check-and-set (start here, not with locks)
+
+The cheapest correct answer is usually a **conditional write** that checks and mutates in one atomic step:
+
+```sql
+UPDATE seats SET status='held', user_id=42
+WHERE seat_id=17 AND status='available';
+-- 1 row updated → you won. 0 rows → someone beat you. No lock objects anywhere.
+```
+
+Same idea as optimistic concurrency (`WHERE version = 7` … `SET version = 8`) and Redis `SETNX`/Lua (the rate limiter used exactly this). **Reach for locks only when the critical section spans multiple operations** that can't collapse into one atomic statement.
+
+## Tool 2 — Locks, and the parts people get wrong
+
+**DB pessimistic lock** (`SELECT ... FOR UPDATE`): inside one database, this is the honest default — transactional, released on commit or crash. Say it before reaching for anything distributed.
+
+**Distributed lock** (Redis `SET key val NX PX 30000`): needed when the critical section spans services or seconds. The two failure conversations interviewers want:
+
+- **Expiry vs. slow holder:** lock has TTL 30s (holder crash must not wedge the system forever) — but a GC-paused holder can wake *after* expiry and keep mutating while a new holder works. Fix: **fencing tokens** — the lock service issues a monotonically increasing number; storage rejects writes carrying a stale token. Without fencing, a TTL lock is advisory, not safe — saying this sentence is staff-level signal.
+- **What are you locking?** Lock granularity = contention scope: lock the *seat*, not the *event*; the *account*, not the *ledger*.
+
+**The waiting room** (Ticketmaster): when 500K people want 10K tickets, don't let them fight at the database. Admit users from a **queue** into the purchase flow at a controlled rate; inside, contention is back to manageable per-seat check-and-set with a **short hold + TTL** ("your seat is held for 8 minutes") — held-but-unpaid seats auto-release.
+
+## Tool 3 — Idempotency: making retries harmless
+
+Contention's evil twin is **duplication**: networks retry, users double-click, queues deliver at-least-once (queues lesson promised this fight — here it is). A retried "charge ₹500" must not charge twice.
+
+<Mermaid code={`sequenceDiagram
+    participant C as Client
+    participant P as Payment API
+    participant DB as idempotency store
+    C->>P: POST /charge {amount, idempotency_key: "a1b2"}
+    P->>DB: INSERT key a1b2 (unique constraint)
+    DB-->>P: ok — first time
+    P->>P: charge the card
+    P->>DB: store result under a1b2
+    P-->>C: 200 charged
+    Note over C,P: timeout! client retries
+    C->>P: POST /charge {..., idempotency_key: "a1b2"}
+    P->>DB: INSERT a1b2 → duplicate!
+    P-->>C: 200 (stored result replayed — no second charge)`} />
+
+Mechanics that make it real: the **client generates the key** (one per logical operation, reused on retry — that's the whole point); the server enforces it with a **unique constraint** (atomic — a check-then-insert race would readmit duplicates); store the **result** so retries get the same response; keys expire after ~24–48h. This is Stripe's actual public API design — cite it.
+
+For state that changes multiple times, add a **state machine**: `pending → charged → refunded` with legal transitions enforced in the DB. A duplicate "mark charged" on an already-charged payment is an illegal transition → rejected. (Your appointment-status war story is literally this — use it in interviews.)
+
+## Tool 4 — Ledgers: money is append-only
+
+Never `UPDATE balance = balance - 500`. Financial state is an **append-only double-entry ledger**: every movement is two immutable rows (debit A, credit B); balance = SUM (cached, but recomputable). Why interviewers care: an update destroys history — no audit, no dispute resolution, no reconciliation; an append-only ledger makes every balance explainable. One sentence of "double-entry, append-only, balances are derived" unlocks the payments walkthrough.
+
+## Questions this pattern unlocks
+
+| Bank question | How the pattern applies |
+|---------------|------------------------|
+| **Ticketmaster** (walkthrough) | waiting room + seat hold w/ TTL + check-and-set |
+| **Payment system** (walkthrough) | idempotency keys + state machine + ledger — your fintech wheelhouse |
+| **Job scheduler** (walkthrough) | "exactly-once" = at-least-once trigger + lease (lock w/ TTL + heartbeat) + idempotent jobs + fencing |
+| **Airbnb booking** | calendar date-range check-and-set; overlapping-dates uniqueness |
+| **Flash sale** | inventory as atomic decrement (Redis Lua) + queue to meter entry |
+| **Stock exchange** | contention taken to its limit: a single-threaded in-memory matching engine per symbol — sidestep locking entirely by serializing |
+
+<Quiz questions={[
+  {
+    q: 'Two users click "book seat 17" simultaneously. Cheapest correct mechanism?',
+    options: [
+      'Redis distributed lock per seat',
+      'A conditional UPDATE ... WHERE status=\'available\' — one atomic statement; exactly one request updates 1 row and wins',
+      'Queue all bookings through one worker',
+      'Optimistic retry loop with version numbers'
+    ],
+    answer: 1,
+    why: 'One-statement critical section = no lock needed. Distributed locks (option 1) add infrastructure and failure modes to solve what the DB does atomically for free. Escalate tools only when the critical section grows.'
+  },
+  {
+    q: 'Payment service holds a Redis lock (TTL 30s), GC-pauses for 40s, wakes, and writes. A second holder is already working. What was missing?',
+    options: [
+      'A longer TTL',
+      'Fencing tokens — monotonically increasing numbers issued with the lock; storage rejects writes bearing an older token than the newest seen',
+      'A Redis cluster for lock high-availability',
+      'Shorter GC pauses via JVM tuning'
+    ],
+    answer: 1,
+    why: 'TTL-expiry-plus-zombie-holder is THE distributed lock trap (Kleppmann\'s Redlock critique). Longer TTLs just move the window. Fencing makes stale holders harmless at the storage layer.'
+  },
+  {
+    q: 'Why must the CLIENT generate the idempotency key?',
+    options: [
+      'Clients have better randomness',
+      'The duplicate the key must catch is the client\'s own retry of one logical operation — only the client knows two requests are "the same attempt"; a server-generated key would differ per request and catch nothing',
+      'To reduce server load',
+      'Servers cannot generate unique keys safely'
+    ],
+    answer: 1,
+    why: 'The key identifies intent ("this one purchase"), and intent lives client-side. Server-side dedup by amount+time is a heuristic that false-positives legitimate repeat purchases.'
+  },
+  {
+    q: 'Interviewer: "Why an append-only ledger instead of updating a balance column?"',
+    options: [
+      'Appends are faster than updates',
+      'Updates destroy history: no audit trail, no dispute resolution, no reconciliation when systems disagree. Double-entry appends make every balance a derivable, explainable sum',
+      'Balance columns cannot be sharded',
+      'Regulation requires SQL'
+    ],
+    answer: 1,
+    why: 'Money questions are history questions. Append-only + derived balances is the difference between "trust me" and "here\'s the proof" — and reconciliation (comparing your ledger to the bank\'s) only exists if history exists.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: **race-condition gauntlet** — 5 scenarios (double-booked hotel room, double-charged card, twice-run cron job, oversold flash sale, two riders matched to one driver), 2 minutes each: name the race, pick the cheapest sufficient tool, name its failure mode. Then weekend mock: **Ticketmaster**.

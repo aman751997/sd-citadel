@@ -1,0 +1,103 @@
+---
+title: 'Pattern: Partitioning & Consistent Hashing'
+description: 'How data spreads across nodes without reshuffling the world — the backbone of every "design Redis/Dynamo/S3" infra round.'
+module: 9
+order: 1
+minutes: 30
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## The pattern in one sentence
+
+When data outgrows one node you split it by key across many — and the *method* of splitting decides what happens on the day you add node 11 to a 10-node cluster, which is the day naive designs die.
+
+**Trigger words:** any "design a distributed X" (cache, KV store, object store), "how does it scale horizontally?", "what happens when you add a node?"
+
+## Why modulo hashing fails
+
+`node = hash(key) % N` distributes beautifully — until N changes. Going 10 → 11 nodes changes the answer for **~91% of keys**: nearly every key now lives "somewhere else." For a cache, that's a total cold start (stampede at the DB); for a store, a full data reshuffle. The interviewer's "what happens when you add a node?" is aimed exactly here.
+
+## Consistent hashing — the fix
+
+Hash node IDs and keys onto the same circular space (the **ring**). A key belongs to the **first node clockwise** from it:
+
+<Mermaid code={`flowchart LR
+    subgraph ring["The ring (0 → 2³² wraps around)"]
+      direction LR
+      A["Node A @ 0.1"] --- K1["key x @ 0.25"] --- B["Node B @ 0.4"] --- K2["key y @ 0.6"] --- C["Node C @ 0.8"]
+    end
+    K1 -->|"clockwise"| B
+    K2 -->|"clockwise"| C`} />
+
+Add node D at 0.5: only keys in (0.4, 0.5] move — from C to D. **Adding/removing a node moves ~1/N of keys, not ~all.** That single sentence is the pattern's payoff — say it verbatim.
+
+**Virtual nodes (the mandatory follow-up):** few physical nodes = lumpy, unfair arc sizes; and a removed node dumps its whole arc onto one neighbor. Fix: each physical node appears at ~100–1000 points on the ring ("vnodes"). Load evens out statistically; a dead node's arcs scatter across *everyone*; and **heterogeneous hardware** gets handled by giving bigger boxes more vnodes. Consistent hashing without vnodes is half an answer — interviewers know it.
+
+Who uses it: Dynamo/Cassandra (data placement), Redis-cluster-style caches, Kafka consumer↔partition-ish balancing, sticky routing at LBs (load-balancing lesson). One mechanism, four appearances — pattern recognition again.
+
+## Range partitioning — the other honest option
+
+Split by key **ranges** (users A–F → node 1) instead of hash. You lose uniform spread but gain **ordered scans**: "all events for March" hits one partition instead of all of them. This is HBase/Bigtable's choice, and why time-series systems lean range.
+
+| | Hash | Range |
+|--|------|-------|
+| Load spread | uniform (hash randomizes) | can hotspot (today's writes all land in the newest range) |
+| Range scans | scatter-gather every node | one/few partitions ✅ |
+| Pick when | point lookups dominate (caches, KV) | time/ordered scans dominate (metrics, logs) |
+
+The hybrid worth knowing: **compound keys** — hash on a partition key, range-sort within it (`(user_id) → time`). "All of user 42's messages this week" = one partition, one ordered scan. This is literally Cassandra's data model and DynamoDB's PK/SK — one sentence connects three technologies.
+
+## Hot partitions — the recurring disease
+
+Every partitioning scheme has the same failure: one key/range takes disproportionate traffic (celebrity user, today's date, viral post). The toolkit, in escalation order:
+
+1. **Better key** — compose it: `date` → `date#hash(user)%16` splits today's writes 16 ways (at the cost of 16 reads to reassemble — say the cost).
+2. **L1 cache** for hot *reads* (caching lesson's celebrity fix).
+3. **Split the hot partition** — good stores auto-split by load (Bigtable), or you add vnode weight.
+
+Note the rhyme: hot partition ≡ hot shard (databases) ≡ hot key (caches) ≡ hot Kafka partition. **One disease, four costumes** — diagnosing it fast on unseen problems is exactly the transfer skill this campaign trains.
+
+## Rebalancing operationally (one breath)
+
+Data doesn't teleport when the ring changes: the new owner **streams data from the old owner** while traffic continues (serve reads from old until cutover), throttled so the transfer doesn't eat production IO. Meanwhile replication (core-concepts lesson: each arc lives on the next R nodes clockwise → quorum reads/writes) keeps a node death survivable. That connects this lesson to Dynamo's whole design — the KV-store walkthrough composes exactly these pieces.
+
+<Quiz questions={[
+  {
+    q: 'Cache cluster grows 10 → 11 nodes with modulo placement. What happens, and with consistent hashing instead?',
+    options: [
+      'Modulo: 1/11 of keys move. Consistent: same',
+      'Modulo: ~10/11 of keys remap → near-total cache cold start → DB stampede. Consistent hashing: ~1/11 move — a blip, not an event',
+      'Both cause full reshuffles; consistent hashing is just faster at it',
+      'Modulo fails only if N is not prime'
+    ],
+    answer: 1,
+    why: 'The 1/N vs (N-1)/N difference IS consistent hashing\'s entire reason to exist. Tie it to consequence: remapped cache keys = misses = the stampede math from the caching lesson.'
+  },
+  {
+    q: 'Why do real systems put each physical node at hundreds of ring positions (vnodes)?',
+    options: [
+      'More positions = more storage capacity',
+      'Even load statistically, scatter a dead node\'s arcs across ALL survivors instead of one unlucky neighbor, and weight heterogeneous hardware by vnode count',
+      'To make the hash function cryptographically secure',
+      'Vnodes enable range queries on the ring'
+    ],
+    answer: 1,
+    why: 'Three problems, one mechanism: lumpy arcs, failure-load dumping, unequal hardware. Listing all three is the difference between having heard of vnodes and understanding them.'
+  },
+  {
+    q: 'Metrics system: partition by metric timestamp for time-range scans, but all writes hammer the newest partition. Standard fix?',
+    options: [
+      'Switch to pure hash partitioning',
+      'Compound key — hash prefix spreads current writes across k partitions (time#hash(series)%k), range-sorted within; reads fan to k partitions instead of 1, a stated cost',
+      'Buffer writes in a queue',
+      'Bigger node for the current partition'
+    ],
+    answer: 1,
+    why: 'Pure hash (option 1) kills the range scans you partitioned for; the compound key keeps both, trading a bounded read fan-out. Naming that trade is the senior move. This exact trick reappears in the Datadog walkthrough.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: whiteboard-narrate consistent hashing from a blank page in 5 minutes — ring, placement, node-add, vnodes, replication arcs — as if the interviewer asked "how would your cache scale?" Drawing-while-talking is your logged decomposition gap; this is its purest rep. Weekend mock: **distributed cache**.

@@ -1,0 +1,125 @@
+---
+title: 'Caching: Redis Patterns, Invalidation, Key Design'
+description: 'The lesson that kills your #1 logged gap — a cache is key shape + TTL + invalidation + failure plan, or it is nothing.'
+module: 2
+order: 2
+minutes: 35
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## Your personal stakes in this lesson
+
+From your own mock logs: *"Cache in Redis" without key shape, TTL rationale, or invalidation strategy — interviewer red flag.* This lesson exists to make that sentence impossible for you to say again.
+
+**The rule: a cache in your design is these four things, spoken out loud, or it doesn't count:**
+
+1. **Key shape** — exactly what string maps to exactly what value
+2. **TTL + why that number**
+3. **Invalidation story** — what happens when the underlying data changes
+4. **Failure plan** — what happens when the cache is cold, down, or stampeded
+
+## Where caches live
+
+<Mermaid code={`flowchart LR
+    B["Browser cache"] --> CDN["CDN edge"] --> GW["Gateway"] --> APP["App server\n(local in-process cache)"] --> R[("Redis\n(distributed cache)")] --> DB[(Database)]`} />
+
+Each layer trades freshness for distance: browser and CDN are fastest and stalest; Redis is the workhorse shared truth-ish layer; the DB is truth. In interviews, "cache" usually means the Redis layer — but mentioning "immutable assets go to the CDN and never hit us" is free credit.
+
+## Cache-aside — the default read pattern
+
+```
+value = redis.get(key)
+if miss:
+    value = db.query(...)
+    redis.set(key, value, ttl)
+return value
+```
+
+App code owns the logic; cache holds only what's actually read (hot set). This is the answer for ~90% of interview caching. Alternatives worth one sentence each: **write-through** (write to cache + DB together — reads always warm, writes slower), **write-behind** (write to cache, flush to DB async — fast but you can lose writes; rare, say it only with a durability caveat).
+
+## Invalidation — the part that makes it a real design
+
+When the DB row changes, your cache is now a liar. Three honest strategies:
+
+| Strategy | How | When it's right |
+|----------|-----|----------------|
+| **TTL-only** | let entries expire; tolerate staleness ≤ TTL | data where bounded staleness is fine (profiles, product pages) |
+| **Delete-on-write** | after DB write, `DEL` the key; next read repopulates | the default when writers go through your app code |
+| **Event/CDC-driven** | DB change stream (Debezium etc.) drives deletes | many writers / other services touch the DB |
+
+Two rules that show seniority:
+
+- **Delete, don't update, the cache on writes.** Updating cache + DB as two non-atomic writes under concurrency can strand a *permanently* wrong value (two writers race, cache ends up with the loser). Delete is self-healing: worst case is one extra miss.
+- **TTL is your backstop even when you invalidate** — set it anyway; it caps the damage of any missed invalidation.
+
+The one-liner to say in every design: *"Cache-aside on key `user:{id}:profile`, TTL 15 min as staleness bound, delete-on-write for immediate consistency on the user's own edits."* Four components, one breath.
+
+## Key design
+
+- **Namespace, always**: `feed:user:123:page:1`, not `123`. Prevents collisions, enables targeted invalidation, makes debugging humane. Multi-tenant? Tenant goes in the key (`t:42:user:123` — you already know this instinct from your day job).
+- **Version escape hatch**: prefix like `v2:feed:...` lets you invalidate an entire scheme by bumping the version — no scanning keys.
+- **Value granularity**: cache whole objects (`user:123` → JSON blob) by default; per-field hashes only if fields update independently at meaningfully different rates.
+
+## The three classic failure modes (deep-dive gold)
+
+**1. Stampede (thundering herd).** A hot key expires; 10,000 concurrent requests all miss and all hit the DB at once. Fixes: **per-key mutex** (first miss recomputes, rest wait), **stale-while-revalidate** (serve the expired value while one worker refreshes), or **jittered TTLs** so a whole class of keys doesn't expire in the same second.
+
+**2. Hot key.** One key (celebrity profile) takes 500K reads/sec — melts its Redis shard. Fixes: **local L1 cache** in each app server with a very short TTL (1s absorbs almost everything, staleness bounded at 1s), or replicate the key across shards (`key#1..N`, read a random copy).
+
+**3. Cache down.** If Redis dies, does the DB survive the full read load? If not, your cache is load-bearing — say so: circuit-break, shed load, or serve degraded responses. "The cache is an optimization" is only true if you've checked the DB survives without it.
+
+## Eviction + sizing
+
+Memory full → something leaves: **LRU** (default, recency), LFU (frequency — better for stable hot sets), TTL-based. Interview default: "LRU, and I've sized the working set" — recall the estimation lesson's move: hot set 4 GB → one node's RAM, cluster only for availability/throughput. That sentence chain (working set → node size → cluster reason) is exactly what "no hand-waving" sounds like.
+
+<Quiz questions={[
+  {
+    q: 'The complete cache sentence for a product page. Which passes the four-component rule?',
+    options: [
+      '"We cache product pages in Redis for speed"',
+      '"Cache-aside, key product:{id}, TTL 10 min since price edits tolerate short staleness, delete-on-write from the catalog service, jittered TTLs against mass expiry"',
+      '"Write-through caching with LRU eviction"',
+      '"Cache the top 20% of products — 80% of traffic"'
+    ],
+    answer: 1,
+    why: 'Key shape ✓ TTL with reason ✓ invalidation ✓ failure plan ✓. The others each name one component and hand-wave the rest — your logged red flag.'
+  },
+  {
+    q: 'Why DELETE the cache key on write instead of SETting the new value?',
+    options: [
+      'DEL is a faster Redis operation',
+      'Two racing writers can interleave their DB and cache writes so the cache permanently holds the losing value; delete is self-healing — worst case one extra miss',
+      'SET would reset the TTL incorrectly',
+      'Deleting saves memory'
+    ],
+    answer: 1,
+    why: 'The write-write race is the subtle bug: writer A (DB) → writer B (DB) → writer B (cache) → writer A (cache) leaves A\'s stale value cached forever. Delete makes the next read fetch truth.'
+  },
+  {
+    q: 'A celebrity goes live; their profile key takes 500K reads/sec on one Redis shard. Best first fix?',
+    options: [
+      'Bigger Redis instance',
+      'Shard the cluster further',
+      'A 1-second local L1 cache in each app server — absorbs nearly all reads, staleness bounded at 1s',
+      'Remove the TTL so it never expires'
+    ],
+    answer: 2,
+    why: 'Hot key ≠ capacity problem, so bigger boxes and more shards don\'t help (the ONE key still lives on ONE shard). Local L1 attacks the actual problem: read concentration.'
+  },
+  {
+    q: 'Hot key expires; 10K requests hit the DB simultaneously. Name + fix?',
+    options: [
+      'Hot key — add replicas',
+      'Stampede — per-key mutex or stale-while-revalidate so one request refreshes while others wait or eat slightly stale data',
+      'Cache penetration — use a Bloom filter',
+      'Eviction storm — switch LRU to LFU'
+    ],
+    answer: 1,
+    why: 'Stampede = many concurrent misses on one expiry. Mutex/stale-while-revalidate collapses 10K DB hits into 1. (Penetration is the related-but-different case: repeated misses on keys that don\'t exist at all.)'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: **commit drill, five rounds** — "cache for the feed / session store / rate limiter / typeahead / product catalog." 90 seconds each: key shape, TTL + reason, invalidation, failure mode. This is THE drill for your #1 gap; expect it in every future mock until it's reflex.

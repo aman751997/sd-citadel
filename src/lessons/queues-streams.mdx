@@ -1,0 +1,125 @@
+---
+title: 'Queues & Streams: Kafka, SQS, Delivery Semantics'
+description: 'Async decoupling done properly — queues vs logs, ordering, consumer groups, and why exactly-once is mostly a myth.'
+module: 2
+order: 3
+minutes: 30
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## Why queues exist (the sentence version)
+
+A queue turns "do this now, and if you're slow or dead the user suffers" into "write down that this must happen, and something will make it happen." You buy: **decoupling** (producer doesn't know consumers), **buffering** (absorb spikes, drain at your pace), and **retry-ability** (failures re-run instead of vanishing). You pay: **eventual, not immediate** (the work happens... soon), and a new component to operate.
+
+This is your day-job territory (Kafka) — the goal here is making the interview version crisp.
+
+## Queue vs log — the distinction interviewers test
+
+<Mermaid code={`flowchart TD
+    subgraph Q["Queue (SQS, RabbitMQ)"]
+      M1["msg"] --> C1["consumer takes it,\nmessage is GONE"]
+    end
+    subgraph L["Log (Kafka, Kinesis)"]
+      P1["append-only partitions"] --> C2["consumer group A\n(own offsets)"]
+      P1 --> C3["consumer group B\n(own offsets)"]
+    end`} />
+
+| | **Queue** (SQS) | **Log** (Kafka) |
+|--|----------------|-----------------|
+| A message is… | consumed and deleted | appended and retained; consumers track their own **offset** |
+| Consumers | compete for messages | each **consumer group** reads the full stream independently |
+| Replay | no | yes — rewind the offset |
+| Use | task distribution (send this email) | event distribution (order-placed → email svc, analytics, fraud all react) |
+
+Rule of thumb: **one consumer type → queue; many independent reactions to the same events, or replay needed → log.**
+
+## Ordering — precise or it's wrong
+
+Kafka guarantees order **within a partition only**. Messages are routed to partitions by key (`hash(key) % partitions`). So:
+
+- Need "all events for order 123 in order" → key by `order_id`. ✅
+- Global total order across everything → one partition → no parallelism. Almost never the real requirement — say that.
+
+Parallelism = number of partitions (each partition is consumed by at most one consumer in a group). Hot key (one entity producing most traffic) = hot partition — the same skew problem as sharding, same conversation.
+
+## Delivery semantics — the "exactly-once" trap
+
+An interviewer WILL poke this. The truth in three lines:
+
+- **At-most-once**: fire and forget. Messages can be lost. Rarely acceptable.
+- **At-least-once**: retry until acknowledged. Messages can be **duplicated**. This is the real-world default.
+- **Exactly-once**: across arbitrary systems, effectively a myth. What exists is at-least-once delivery + **idempotent processing** — so duplicates are harmless.
+
+The senior sentence: *"I'll take at-least-once and make the consumer idempotent — dedupe on message ID, or make the operation naturally idempotent (SET, not INCREMENT)."* How to build idempotency properly is the contention pattern lesson — here you just need the framing right.
+
+Why duplicates are unavoidable: consumer processes the message, then crashes **before acknowledging**. The broker must assume failure and redeliver. There is no protocol fix — the ack and the side effect can't be made atomic across two systems without idempotency or transactions spanning both.
+
+## The supporting cast (one line each, all deep-dive currency)
+
+- **DLQ (dead-letter queue)** — after N failed retries, park the message aside instead of poisoning the queue forever; alert a human. *Every* async design should mention one.
+- **Backpressure** — consumers falling behind: monitor **lag** (offset gap); autoscale consumers up to the partition count; beyond that, add partitions or shed load.
+- **Retry with exponential backoff + jitter** — immediate retries against a struggling downstream make it worse; jitter prevents synchronized retry waves.
+- **Visibility timeout** (SQS) — a taken-but-unacked message reappears after the timeout; too short = duplicates while still processing, too long = slow failure recovery.
+
+## Where queues slot into designs
+
+The recurring shape — write path returns fast, heavy work happens async:
+
+<Mermaid code={`flowchart LR
+    U["user request"] --> API["API: validate,\npersist, enqueue"] --> K[("Kafka / SQS")]
+    API -->|"202 + job id (fast)"| U
+    K --> W1["workers\n(scale independently)"] --> S["side effects: email,\ntranscode, fan-out, index"]`} />
+
+You'll reuse this exact picture in: notifications, YouTube transcoding, web crawler, feed fan-out, job scheduler, ad aggregation. It's the async-pipelines pattern module later — this lesson is its vocabulary.
+
+<Quiz questions={[
+  {
+    q: 'Order events must be processed in order per order, at high throughput. Design?',
+    options: [
+      'Single Kafka partition — only way to guarantee order',
+      'Key messages by order_id — per-order ordering within partitions, parallelism across orders',
+      'SQS with FIFO disabled for speed',
+      'Timestamps + consumer-side reordering'
+    ],
+    answer: 1,
+    why: 'Order-per-entity is the actual requirement 99% of the time, and partition-keying delivers it with full parallelism. Global ordering (option 1) sacrifices all throughput for a guarantee nobody asked for.'
+  },
+  {
+    q: 'Interviewer: "Can you guarantee each payment event is processed exactly once?" Honest strong answer:',
+    options: [
+      '"Yes, Kafka has an exactly-once mode"',
+      '"Delivery will be at-least-once — the consumer can always crash between processing and acking. I make processing idempotent: dedupe on event ID, so duplicates are no-ops"',
+      '"We use SQS FIFO, which deduplicates"',
+      '"Process synchronously instead to avoid the problem"'
+    ],
+    answer: 1,
+    why: 'Names WHY duplicates are unavoidable (crash between side effect and ack) and gives the standard fix. Leaning on a vendor feature without the reasoning dies to one follow-up.'
+  },
+  {
+    q: 'Email-sending consumers keep crashing on one malformed message, and the queue is backing up. What was missing?',
+    options: [
+      'More consumers',
+      'A dead-letter queue — after N retries the poison message parks aside with an alert, and the queue keeps flowing',
+      'Shorter visibility timeout',
+      'At-most-once delivery so it is only attempted once'
+    ],
+    answer: 1,
+    why: 'The poison-message scenario is the standard DLQ probe. At-most-once (option 4) "fixes" it by silently losing real messages — worse.'
+  },
+  {
+    q: 'When is a log (Kafka) clearly right over a queue (SQS)?',
+    options: [
+      'Whenever throughput is high',
+      'When email service, analytics, and fraud detection must all independently react to the same order-placed events — and you may replay history later',
+      'When messages must be encrypted',
+      'When ordering does not matter'
+    ],
+    answer: 1,
+    why: 'Multiple independent consumer groups + replay = the log model\'s whole reason to exist. Raw throughput alone doesn\'t distinguish them.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: take your real day-job Kafka setup and narrate it interview-style — topics, keys, consumer groups, what happens on consumer crash, where the DLQ is. 10 minutes. Turning day-job knowledge into interview vocabulary is free senior signal.

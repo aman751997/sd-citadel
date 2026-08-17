@@ -1,0 +1,45 @@
+---
+// Client-rendered mermaid diagram. Usage in MDX:
+// <Mermaid code={`flowchart LR\n  A --> B`} />
+interface Props {
+  code: string;
+}
+const { code } = Astro.props;
+---
+<div class="diagram"><pre class="mermaid">{code}</pre></div>
+
+<style>
+  .diagram {
+    margin: 1.4rem 0;
+    padding: 0.8rem;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow-x: auto;
+    display: flex;
+    justify-content: center;
+  }
+  .diagram :global(pre.mermaid) {
+    background: none !important;
+    border: none;
+    padding: 0;
+    margin: 0;
+  }
+</style>
+
+<script>
+  import mermaid from 'mermaid';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true,
+      background: '#161b22',
+      primaryColor: '#1c2330',
+      primaryTextColor: '#e6edf3',
+      primaryBorderColor: '#e3b341',
+      lineColor: '#9198a1',
+      fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif',
+    },
+  });
+</script>

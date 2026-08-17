@@ -1,0 +1,178 @@
+---
+title: 'Sliding Window'
+description: 'Fixed, variable, and hashmap-tracked windows — one template, five forms, with the shrink-direction rule that decides everything, in Java.'
+order: 2
+minutes: 35
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## When this pattern fires
+
+The question asks about a **contiguous run** — "longest substring such that…", "shortest subarray with…", "max sum of any K consecutive…", "does any window contain an anagram of…". Brute force checks every (start, end) pair: O(n²) windows × O(n) evaluation. The window insight: **when the window slides one step, almost nothing changes** — remove one element's contribution, add another's. Maintain state incrementally → O(n).
+
+This is "what work am I repeating?" answered: re-scanning overlapping windows.
+
+## Form 1 — Fixed window (size K given)
+
+```java
+// Maximum Average Subarray I — best sum of exactly K consecutive
+public double findMaxAverage(int[] nums, int k) {
+    long sum = 0;
+    for (int i = 0; i < k; i++) sum += nums[i];   // build first window
+    long best = sum;
+    for (int i = k; i < nums.length; i++) {
+        sum += nums[i] - nums[i - k];             // slide: add head, drop tail
+        best = Math.max(best, sum);
+    }
+    return (double) best / k;
+}
+```
+
+Build once, then each slide is O(1): `+ entering − leaving`. Anagram-in-window problems (Permutation in String) are fixed windows where the state is a **frequency map + a matched-count** instead of a sum.
+
+## Form 2 — Variable window: the master template
+
+Window grows on the right always; shrinks from the left **when a condition triggers**. Everything is this template:
+
+```java
+int left = 0, best = 0;
+for (int right = 0; right < n; right++) {
+    addToState(nums[right]);                  // window grows
+    while (windowInvalid()) {                 // shrink until valid again
+        removeFromState(nums[left]);
+        left++;
+    }
+    best = Math.max(best, right - left + 1);  // record — placement depends on goal!
+}
+```
+
+**The shrink-direction rule — the one decision that defines each problem (you named this cold on re-entry; keep it sharp):**
+
+<Mermaid code={`flowchart TD
+    Q{"What does the problem want?"} -->|"LONGEST valid window"| A["shrink WHEN INVALID\nrecord AFTER the while\n(window is valid there)"]
+    Q -->|"SHORTEST satisfying window"| B["shrink WHILE STILL SATISFYING\nrecord INSIDE the while\n(before it stops satisfying)"]`} />
+
+- **Longest** (Longest Substring No Repeat, Max Consecutive Ones III): violate → shrink until legal → record. The `while` restores validity; record after it.
+- **Shortest** (Min Size Subarray Sum): reach the target → **record, then shrink** to hunt a shorter one; the `while` runs while the window still satisfies, and the record lives **inside** it. Your logged edge: the `while (sum >= target)` + record-inside-loop combo.
+
+```java
+// Max Consecutive Ones III — longest run of 1s with ≤ k zero-flips (your unseen win #2)
+public int longestOnes(int[] nums, int k) {
+    int left = 0, zeros = 0, best = 0;
+    for (int right = 0; right < nums.length; right++) {
+        if (nums[right] == 0) zeros++;
+        while (zeros > k) {                    // invalid: too many zeros in window
+            if (nums[left] == 0) zeros--;
+            left++;
+        }
+        best = Math.max(best, right - left + 1);
+    }
+    return best;
+}
+```
+
+The reframe that cracked it cold: "flip ≤ k zeros" ⇒ **"window may contain at most k zeros."** Constraint-on-operation → constraint-on-window-contents is the standard disguise; unmasking it IS the recognition rep.
+
+## Form 3 — Variable + HashMap (window state is a frequency map)
+
+When validity depends on *what's inside* (distinct chars, char counts), the state is a map:
+
+```java
+// Longest Substring Without Repeating Characters
+public int lengthOfLongestSubstring(String s) {
+    int[] lastSeen = new int[128];
+    java.util.Arrays.fill(lastSeen, -1);
+    int left = 0, best = 0;
+    for (int right = 0; right < s.length(); right++) {
+        char c = s.charAt(right);
+        if (lastSeen[c] >= left)                       // repeat INSIDE current window
+            left = Math.max(left, lastSeen[c] + 1);    // jump-left — with the guard!
+        lastSeen[c] = right;
+        best = Math.max(best, right - left + 1);
+    }
+    return best;
+}
+```
+
+Your logged edge lives here: the **jump-left `Math.max` guard**. Without it, an old occurrence *behind* the current `left` yanks the window backwards — silently wrong on inputs like `"abba"`. Trace `"abba"` by hand once a month until it's boring.
+
+**Longest Repeating Character Replacement** adds the pattern's cleverest trick: window valid iff `windowLen − maxFreq ≤ k`. And `maxFreq` may go stale when the window shrinks — famously, **you don't need to fix it**: a stale (too-high) maxFreq only lets the window stay too big, and `best` already recorded that size legitimately; the answer can't get worse. Knowing *why* the stale max is safe is a senior-level flex — have the sentence ready.
+
+**Fruit Into Baskets** (queued): "≤ 2 distinct types" — map of counts, shrink while `map.size() > 2`, delete keys at zero. Same template, third costume.
+
+## Form 4 & 5 — one paragraph each
+
+**Min-So-Far** (Best Time to Buy/Sell Stock): degenerate window — track `minPrice` so far and `best = max(best, price − minPrice)` in one pass. It's "window" only in spirit; recognize it so you don't overbuild.
+
+**Deque max** (Sliding Window Maximum, Hard): "max of each window" needs a **monotonic decreasing deque** of indices — front is always the current max; pop back while smaller than the entrant (they can never be max again), pop front when it exits the window left side. Amortized O(1) per step. This bridges into the monotonic-stack pattern.
+
+## Recognition table
+
+| You see | Form | State |
+|---------|------|-------|
+| "exactly K consecutive" | fixed | running sum / freq map |
+| "longest … such that ‹condition›" | variable, shrink-when-invalid | condition counter |
+| "shortest … with at least ‹target›" | variable, shrink-while-valid, record inside | running sum |
+| "no repeats / at most K distinct / anagram of" | variable + hashmap | freq map (+ matched count) |
+| "≤ k flips/replacements allowed" | variable — reframe as window-contents budget | violation counter |
+| "max/min of every window" | deque | monotonic deque |
+| "single pass, best pair (sell after buy)" | min-so-far | one running min |
+
+## Bug bestiary (yours, earned)
+
+- **Jump-left without `Math.max` guard** → window travels backwards on `"abba"`-shaped inputs.
+- **Record in the wrong place** — longest records after the shrink-while; shortest records inside it. Placement error = off-by-one-window answers that pass half the tests.
+- **Shrink with `if` instead of `while`** — one entrant can invalidate by more than one step's worth.
+- **Forgetting to clean map keys at count 0** — `map.size()` lies about distinct count (Fruit Into Baskets trap).
+
+<Quiz questions={[
+  {
+    q: '"Shortest subarray with sum ≥ target." Where does the answer-recording line go, and what is the while-condition?',
+    options: [
+      'After the while; while (sum < target)',
+      'INSIDE the while; while (sum >= target) — record each still-satisfying size, then shrink to hunt shorter; when the loop exits the window no longer satisfies',
+      'After the while; while (sum >= target)',
+      'Before adding nums[right]'
+    ],
+    answer: 1,
+    why: 'The shortest-flavor inversion — your specifically logged edge. Recording after the while (option 3) records an UNsatisfying window: the exact bug that passes examples and fails hidden tests.'
+  },
+  {
+    q: '"abba", no-repeat window, right on the second a. lastSeen[a]=0, left=2. Without the Math.max guard, what happens?',
+    options: [
+      'Nothing — left stays 2 either way',
+      'left would be set to lastSeen[a]+1 = 1, dragging the window BACKWARDS to include the "bb" repeat — the guard keeps left = max(2, 1) = 2',
+      'An index out of bounds',
+      'The second a is skipped'
+    ],
+    answer: 1,
+    why: 'The stale-occurrence trap: a\'s last position (0) is OUTSIDE the current window, so it must not move left. This exact trace is in your bestiary — own it cold.'
+  },
+  {
+    q: 'Longest Repeating Char Replacement: the window shrinks and maxFreq is now stale (too high). Why is NOT fixing it still correct?',
+    options: [
+      'maxFreq never actually goes stale',
+      'A too-high maxFreq only permits the window to stay a size it already legitimately achieved — best has recorded that size, and the final answer only cares about the maximum ever seen, which stale maxFreq cannot inflate beyond reality',
+      'It is a known accepted bug in all solutions',
+      'The while-loop recomputes it implicitly'
+    ],
+    answer: 1,
+    why: 'The window never shrinks below the best valid size seen; stale maxFreq can\'t create a NEW larger record without a genuinely higher frequency arriving. Explaining this earns real interview credit — most candidates memorize past it.'
+  },
+  {
+    q: 'Unseen problem: "longest subarray where you may DELETE at most one element so all remaining are 1s." First move?',
+    options: [
+      'DP over delete/keep states',
+      'Reframe: window containing at most ONE zero (the deletable one), answer = window length − 1 — the ≤k-budget disguise with k=1, plus an off-by-one for the mandatory delete',
+      'Two pointers from opposite ends',
+      'Prefix sums of zero counts'
+    ],
+    answer: 1,
+    why: 'Same unmasking as Max Consecutive Ones III (your win #2): operation-budget → window-contents budget. If this reframe fired in under a minute, the Recognition Fear is losing on schedule.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: **Permutation in String** next (fixed + freq-map — your untouched sub-form), then the pattern boss: **Minimum Window Substring** (Hard, shrink-while-valid + matched-count). Both pending on your roadmap; the second is a Blind75 staple.

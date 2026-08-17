@@ -1,0 +1,134 @@
+---
+title: 'Core Concepts: CAP, Consistency, Availability'
+description: 'The vocabulary every deep dive uses — CAP, consistency models, quorums, and availability math, in plain language.'
+module: 1
+order: 3
+minutes: 30
+---
+import Quiz from '../components/Quiz.astro';
+import Mermaid from '../components/Mermaid.astro';
+
+## Why this lesson exists
+
+Deep dives are conversations in a specific vocabulary. When an interviewer asks "what happens during a network partition?" they're testing whether you can *reason* with these concepts, not recite them. This lesson gives you the five ideas that appear in literally every SD interview: CAP, consistency models, quorums, availability math, and latency numbers.
+
+## CAP — what it actually says
+
+Three properties. A distributed system with replicated data can only fully guarantee two when things go wrong:
+
+- **C**onsistency — every read sees the most recent write
+- **A**vailability — every request gets a (non-error) response
+- **P**artition tolerance — the system survives nodes being unable to talk to each other
+
+Here's the part people get wrong: **P is not optional.** Networks partition — cables get cut, switches die, GC pauses make a node look dead. So the real choice is only ever **C vs A, during a partition**:
+
+<Mermaid code={`flowchart TD
+    P["🔌 Network partition happens\n(it always eventually does)"] --> Q{"A write arrives on one side.\nWhat do we do?"}
+    Q -->|"Refuse writes/reads until\nnodes agree again"| C["CP system\nConsistent, but some\nrequests fail"]
+    Q -->|"Keep serving, sides may\ndiverge, reconcile later"| A["AP system\nAvailable, but reads\nmay be stale"]`} />
+
+**Interview usage:** make the CAP call in the requirements phase, with a product reason.
+
+- Banking ledger, seat booking, inventory → **CP**: "a wrong answer is worse than no answer."
+- Social feed, likes count, product views → **AP**: "a stale answer is fine; an error page is not."
+
+Never say "we need full consistency AND five nines" — that sentence tells the interviewer you don't understand the tradeoff.
+
+> **PACELC — the bonus point:** even with no partition (**E**lse), you trade **L**atency vs **C**onsistency. Synchronous replication to another region = consistent but slow. Async = fast but replica lag. Dropping "and even without partitions, it's latency vs consistency — PACELC" earns senior credit in one sentence.
+
+## Consistency models — the ladder
+
+"Consistency" isn't binary. It's a ladder from strict to loose. You need three rungs:
+
+| Model | Guarantee | Cost | Example use |
+|-------|-----------|------|-------------|
+| **Strong (linearizable)** | Every read sees the latest write, globally | Coordination on every operation — slow, availability suffers | Bank balance, seat inventory, distributed locks |
+| **Read-your-own-writes** | *You* see your writes; others may lag | Cheap — route user to same replica or session token | Profile edits, posting a comment |
+| **Eventual** | Replicas converge... eventually | Nearly free — async replication | Like counts, follower counts, analytics |
+
+The senior move: **different data in the same system gets different models.** In a payment system: ledger = strong, "your recent transactions" list = read-your-own-writes, spending analytics = eventual. Saying that sentence about *your* design is a deep-dive win.
+
+## Quorums — how replicas agree without agreeing on everything
+
+N replicas. Write to W of them, read from R of them. If **W + R > N**, every read overlaps at least one node that has the latest write → you get strong-ish consistency without needing all nodes.
+
+Classic setup: N=3, W=2, R=2. Tune it:
+
+- Write-heavy, reads can lag → W=1, R=3 (fast writes, expensive reads)
+- Read-heavy, writes rare → W=3, R=1 (fast reads — most systems)
+
+Say the inequality out loud when you use it: "R+W > N so reads always intersect the latest write." That's the whole trick — Dynamo, Cassandra interviews live on it.
+
+## Availability math — what the nines cost
+
+| Nines | Downtime/year | What it takes |
+|-------|--------------|---------------|
+| 99% | ~3.7 days | one server and hope |
+| 99.9% | ~8.8 hours | redundancy, health checks, failover |
+| 99.99% | ~53 min | multi-AZ, automated failover, on-call |
+| 99.999% | ~5 min | multi-region active-active, chaos engineering, $$$ |
+
+Two rules:
+
+1. **Never claim nines without a reason.** "Five nines" for a photo-sharing app is interview slop. "99.9% is fine — a feed being down 8 hours a year is annoying, not catastrophic" is judgment.
+2. **Serial components multiply failure.** Two 99.9% services in a request path ≈ 99.8% overall. Every box you add to the critical path costs availability — another reason boxes must earn their place.
+
+## Latency numbers — the physics you can't argue with
+
+Rounded to what you need at the whiteboard:
+
+| Operation | Time |
+|-----------|------|
+| RAM read | ~100 ns |
+| SSD read | ~100 µs (1000× RAM) |
+| Same-datacenter round trip | ~0.5 ms |
+| HDD seek | ~10 ms |
+| Cross-continent round trip | ~70–150 ms |
+
+Consequences you'll use constantly: a 5 ms latency budget forbids disk and cross-region hops (rate limiter lesson used exactly this). A "feels instant" UI budget (~100 ms) allows one datacenter round trip chain, not ten. Chatty services that make 20 sequential same-DC calls just spent 10 ms on network alone.
+
+<Quiz questions={[
+  {
+    q: 'Interviewer: "There\'s a network partition and a booking request arrives. What does your Ticketmaster design do?" Best answer shape:',
+    options: [
+      '"We keep accepting bookings on both sides and merge later"',
+      '"This is a CP choice — I refuse bookings on the minority side; a failed request beats a double-sold seat"',
+      '"We use a database that handles partitions automatically"',
+      '"Partitions are rare enough to ignore"'
+    ],
+    answer: 1,
+    why: 'Seat inventory is the canonical CP case — wrong answer worse than no answer. Option 1 double-sells seats; 3 and 4 dodge the question, and dodging instead of reasoning aloud is your logged habit to kill.'
+  },
+  {
+    q: 'N=3 replicas, W=2, R=2. Why is a read guaranteed to see the latest write?',
+    options: [
+      'Because 2 is a majority of 3, and majorities are always consistent',
+      'Because W+R=4 > N=3, so any read set overlaps any write set in at least one node',
+      'It is not guaranteed — this is eventual consistency',
+      'Because the coordinator caches the latest write'
+    ],
+    answer: 1,
+    why: 'The pigeonhole argument: 2 writers + 2 readers among 3 nodes must share at least one node. That node has the newest version. Say the inequality out loud in interviews.'
+  },
+  {
+    q: 'A user edits their profile and refreshes — must see the change. Their followers can see it 5 seconds later. Cheapest sufficient consistency?',
+    options: [
+      'Strong consistency for all profile reads',
+      'Eventual consistency for everything',
+      'Read-your-own-writes for the editor, eventual for everyone else',
+      'Quorum reads for everyone'
+    ],
+    answer: 2,
+    why: 'Per-data, per-reader consistency choice. Strong for all = paying coordination cost for followers who don\'t need it; eventual for all = the editor sees their edit vanish. The split is the senior answer.'
+  },
+  {
+    q: 'Your design chains 4 services serially, each 99.9% available. Roughly what is the path\'s availability?',
+    options: ['99.9% — the chain is as strong as each link', '99.99% — redundancy adds up', '~99.6% — serial availabilities multiply', '100% if we add retries'],
+    answer: 2,
+    why: '0.999⁴ ≈ 0.996. Every serial box costs availability — argument for fewer boxes in the critical path, and for making non-critical calls async.'
+  }
+]} />
+
+## Drill hand-off
+
+With the buddy: **CAP speed round** — 10 systems named rapid-fire (ledger, like-counter, DNS, seat booking, chat history, …), you call CP/AP + consistency model + one-line product reason, 30 seconds each. Then: pick availability nines for each and defend the cost.
