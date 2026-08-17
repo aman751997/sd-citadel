@@ -1,0 +1,160 @@
+---
+interface Props {
+  title: string;
+  description?: string;
+}
+import { BASE as base } from '../paths';
+const { title, description = 'Personal system design interview prep portal' } = Astro.props;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <title>{title} · SD Citadel</title>
+    <link rel="icon" href={`data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏰</text></svg>`} />
+  </head>
+  <body>
+    <nav class="topnav">
+      <a href={base} class="brand">🏰 SD Citadel</a>
+      <div class="navlinks">
+        <a href={base}>Roadmap</a>
+        <a href={`${base}framework/`}>Cheat Sheet</a>
+      </div>
+      <span id="xp-badge" class="xp-badge" title="Lessons completed"></span>
+    </nav>
+    <main>
+      <slot />
+    </main>
+    <footer>
+      Forged for one engineer's climb to the FAANG Citadel · progress lives in your browser
+    </footer>
+  </body>
+</html>
+
+<style is:global>
+  :root {
+    --bg: #0d1117;
+    --bg-raised: #161b22;
+    --bg-hover: #1c2330;
+    --border: #2d333b;
+    --text: #e6edf3;
+    --text-dim: #9198a1;
+    --accent: #e3b341;
+    --accent-dim: #bb8f2c;
+    --green: #3fb950;
+    --blue: #58a6ff;
+    --red: #f85149;
+    --radius: 10px;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    line-height: 1.65;
+    font-size: 16px;
+  }
+  .topnav {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 0.85rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    background: rgba(13, 17, 23, 0.92);
+    backdrop-filter: blur(8px);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+  .brand {
+    font-weight: 700;
+    font-size: 1.05rem;
+    color: var(--accent);
+    text-decoration: none;
+    letter-spacing: 0.01em;
+  }
+  .navlinks { display: flex; gap: 1.1rem; flex: 1; }
+  .navlinks a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 0.92rem;
+    font-weight: 500;
+  }
+  .navlinks a:hover { color: var(--text); }
+  .xp-badge {
+    font-size: 0.82rem;
+    color: var(--accent);
+    font-weight: 600;
+    font-family: var(--mono);
+  }
+  main { max-width: 880px; margin: 0 auto; padding: 2.2rem 1.4rem 4rem; }
+  footer {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    padding: 2rem 1rem 3rem;
+    border-top: 1px solid var(--border);
+  }
+  h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 0.4rem; }
+  h2 { font-size: 1.4rem; margin: 2.2rem 0 0.7rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.12rem; margin: 1.7rem 0 0.5rem; }
+  a { color: var(--blue); }
+  p { margin: 0.8rem 0; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.3rem 0; }
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 0.12em 0.35em;
+  }
+  pre {
+    background: var(--bg-raised) !important;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.55;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+    display: block;
+    overflow-x: auto;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+  }
+  th { background: var(--bg-raised); }
+  blockquote {
+    margin: 1rem 0;
+    padding: 0.6rem 1.1rem;
+    border-left: 3px solid var(--accent);
+    background: var(--bg-raised);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    color: var(--text-dim);
+  }
+  blockquote p { margin: 0.4rem 0; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+</style>
+
+<script>
+  // XP badge in nav: completed lesson count from localStorage
+  const done = JSON.parse(localStorage.getItem('sdc-progress') || '[]');
+  const badge = document.getElementById('xp-badge');
+  if (badge && done.length > 0) badge.textContent = `⚡ ${done.length} cleared`;
+</script>

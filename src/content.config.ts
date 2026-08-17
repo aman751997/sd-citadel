@@ -1,0 +1,15 @@
+import { defineCollection, z } from 'astro:content';
+import { glob } from 'astro/loaders';
+
+const lessons = defineCollection({
+  loader: glob({ pattern: '**/*.mdx', base: './src/lessons' }),
+  schema: z.object({
+    title: z.string(),
+    description: z.string(),
+    module: z.number(),
+    order: z.number(),
+    minutes: z.number(),
+  }),
+});
+
+export const collections = { lessons };

@@ -1,0 +1,92 @@
+---
+// Interactive multiple-choice quiz. Answers reveal explanations; score is per-question, instant.
+// Usage in MDX:
+// <Quiz questions={[{ q, options: [...], answer: 1, why }]} />
+interface Question {
+  q: string;
+  options: string[];
+  answer: number; // index into options
+  why: string;
+}
+interface Props {
+  questions: Question[];
+}
+const { questions } = Astro.props;
+---
+<div class="quiz" data-quiz>
+  <div class="quiz-head">🧠 Checkpoint — answer before you scroll past</div>
+  {questions.map((question, qi) => (
+    <div class="quiz-q" data-answer={question.answer}>
+      <p class="quiz-question">{qi + 1}. {question.q}</p>
+      <div class="quiz-options">
+        {question.options.map((opt, oi) => (
+          <button class="quiz-opt" data-idx={oi} type="button">{opt}</button>
+        ))}
+      </div>
+      <p class="quiz-why" hidden>{question.why}</p>
+    </div>
+  ))}
+</div>
+
+<style>
+  .quiz {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-raised);
+    padding: 1.1rem 1.3rem;
+    margin: 1.6rem 0;
+  }
+  .quiz-head {
+    font-weight: 700;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    margin-bottom: 0.6rem;
+  }
+  .quiz-q { margin: 1rem 0; }
+  .quiz-question { font-weight: 600; margin: 0.4rem 0 0.6rem; }
+  .quiz-options { display: grid; gap: 0.45rem; }
+  .quiz-opt {
+    text-align: left;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 0.55rem 0.85rem;
+    font-size: 0.92rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .quiz-opt:hover { border-color: var(--accent-dim); }
+  .quiz-opt.correct { border-color: var(--green); background: rgba(63, 185, 80, 0.12); }
+  .quiz-opt.wrong { border-color: var(--red); background: rgba(248, 81, 73, 0.1); }
+  .quiz-opt:disabled { cursor: default; opacity: 0.85; }
+  .quiz-why {
+    font-size: 0.88rem;
+    color: var(--text-dim);
+    border-left: 2px solid var(--green);
+    padding-left: 0.8rem;
+    margin: 0.7rem 0 0;
+  }
+</style>
+
+<script>
+  document.querySelectorAll('[data-quiz] .quiz-q').forEach((qEl) => {
+    const answer = Number(qEl.getAttribute('data-answer'));
+    const opts = qEl.querySelectorAll<HTMLButtonElement>('.quiz-opt');
+    const why = qEl.querySelector<HTMLElement>('.quiz-why');
+    opts.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const picked = Number(btn.dataset.idx);
+        opts.forEach((b) => {
+          b.disabled = true;
+          if (Number(b.dataset.idx) === answer) b.classList.add('correct');
+        });
+        if (picked !== answer) btn.classList.add('wrong');
+        if (why) why.hidden = false;
+      });
+    });
+  });
+</script>

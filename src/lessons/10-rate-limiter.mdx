@@ -1,0 +1,140 @@
+---
+title: 'Walkthrough: Design a Rate Limiter'
+description: 'Full 45-minute fight — requirements to wrap-up, with the algorithm tradeoff (fixed vs sliding vs token bucket) done properly.'
+module: 4
+order: 1
+minutes: 35
+---
+import Quiz from '../components/Quiz.astro';
+
+> **How to use walkthroughs:** attempt each phase yourself first — say your answer out loud, *then* scroll. Reading a walkthrough cold is theory; fighting each phase before revealing is a rep. The section breaks are your pause points.
+
+## Phase 1 — Requirements (0–5 min)
+
+**Functional:**
+- Limit requests **per API key** and **per endpoint** (both granularities)
+- Unauthenticated traffic → fall back to **per-IP** limits
+- On breach: **hard reject** — HTTP 429 + `Retry-After` + `X-RateLimit-*` headers
+- Limits configurable per plan (Free/Pro/Enterprise) via admin portal, **hot-reload** without deploy
+
+**Non-functional:**
+- Sits in the request path of everything → latency budget **p99 < 5 ms**, hard ceiling 10 ms
+- Scale: **1M QPS** peak across the gateway fleet, ~50K API keys + 200 internal services
+- **Fail-open**: if the limiter breaks, traffic flows (availability over enforcement) — with an audit log so we know it happened
+- Accuracy: near-exact; small over-admission at window edges is acceptable if we say so
+
+> Fail-open vs fail-closed is a **product** decision, not a technical one — for a public API, blocking all customers because your limiter died is worse than briefly over-serving. Say the tradeoff, pick, move on. (For a login-brute-force limiter you'd flip to fail-closed — security-critical paths invert the preference.)
+
+## Phase 2 — Estimation (5–10 min)
+
+The only two numbers that change decisions here:
+
+**Latency:** 1M QPS with a 5 ms budget → the check must be a **single round-trip to something in-memory**. Disk-backed anything is dead on arrival. → Redis-class store, or local memory.
+
+**Memory (working set):**
+```
+50K keys × ~10 tracked endpoints × ~100 B per counter ≈ 50 MB
+```
+Conclusion: trivially fits one Redis node — **clustering will be for availability and throughput, not capacity**. 1M QPS is beyond one Redis node (~100K ops/s realistic) → shard by key across a small cluster; hash(key) routing keeps each decision on one shard.
+
+## Phase 3 — API + Data Model (10–15 min)
+
+The limiter is middleware, not a public API — its "API" is an internal check:
+
+```
+ALLOW? (apiKey, endpoint) → { allowed: bool, remaining, resetAt }
+```
+
+Response headers on every response (not just 429s): `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`; on rejection add `Retry-After`.
+
+**Config model (Postgres, admin-portal owned):**
+```
+plans(id, name)                         -- Free / Pro / Enterprise
+limits(plan_id, endpoint, window_sec, max_requests)
+api_keys(key_id, plan_id, ...)
+```
+Config is read-heavy and tiny → each gateway node caches it in memory, refreshed via pub/sub on admin change (hot-reload requirement) with a periodic poll as backstop.
+
+**Counter state lives in Redis, not Postgres** — key design comes in the deep dive.
+
+## Phase 4 — High-Level Design (15–30 min)
+
+```
+client → API Gateway (limiter middleware) → backend services
+              │
+              ├── local config cache  ←─ pub/sub ─ admin portal → Postgres (plans/limits)
+              └── Redis cluster (counters, sharded by api_key)
+```
+
+Trace the flow: request hits gateway → middleware resolves key + plan from local config cache (0 network hops) → one Redis call executes the counting algorithm atomically → allow (attach headers) or 429. Redis timeout (say, 3 ms) → **fail-open**: allow, emit audit event to a queue.
+
+Every box justified: gateway middleware because limits must apply before backend work is spent; Redis because counters need shared state across gateway nodes at in-memory latency; Postgres only for config because config is small, relational, and admin-edited.
+
+## Phase 5 — Deep Dive: the algorithm (30–42 min)
+
+The dive every interviewer wants. Four candidates, one table:
+
+| Algorithm | How | Memory/key | Edge behavior | Verdict |
+|-----------|-----|-----------|---------------|---------|
+| **Fixed window** | counter per `[key, window]`, reset each window | ~8 B | ❌ **2× burst at boundary** — 100 req at 11:59:59 + 100 at 12:00:00 all pass | fine for rough internal limits |
+| **Sliding window log** | store timestamp of *every* request, count last N sec | ~8 B × every request | exact | ❌ memory blows up at 1M QPS |
+| **Sliding window counter** | current + previous window counters, weighted overlap | ~16 B | approximate but no 2× burst | ✅ strong default |
+| **Token bucket** | bucket refills at rate r, request takes a token | ~16 B (tokens + last-refill) | allows controlled bursts up to bucket size | ✅ strong default, burst-friendly |
+
+**Commit:** token bucket. Reasons said out loud: (1) constant 16 B memory per key regardless of traffic — our 50 MB estimate holds, (2) burst tolerance is *configurable product behavior* (bucket size) instead of an accident (fixed-window edge), (3) refill math is lazy — compute tokens from `last_refill` timestamp on each request, no background jobs.
+
+**Atomicity sub-dive** (expect the follow-up): read-modify-write from concurrent gateway nodes races — two nodes both read "1 token left" and both admit. Fix: the whole check-refill-decrement runs as a **Lua script in Redis** — single-threaded execution makes it atomic, one round trip keeps the 5 ms budget. (Alternative answers: `INCR`+`EXPIRE` works for fixed window only; CAS-retry loops burn the latency budget.)
+
+**Second dive if time — hot-key / celebrity key:** one Enterprise key doing 200K QPS melts its shard. Options: local pre-aggregation on each gateway node (batch-decrement every 100 ms — trades exactness for shard survival) vs splitting the key's bucket across shards (exact-ish, complex). Commit to pre-aggregation; over-admission of a few hundred requests at this scale is inside the stated accuracy tolerance.
+
+## Phase 6 — Wrap-Up (42–45 min)
+
+- **Bottleneck at 10×:** Redis cluster ops/s → more shards; config cache already local so it doesn't move.
+- **Monitor:** fail-open events (top alert — silent fail-open = no limits and nobody knows), Redis p99, 429 rates per plan (product signal).
+- **What I'd build next:** per-customer overrides, gradual throttling tier before hard 429, anomaly detection on IP-fallback traffic.
+
+<Quiz questions={[
+  {
+    q: 'Why does fail-open win over fail-closed for a public API rate limiter?',
+    options: [
+      'Fail-open is easier to implement',
+      'Blocking all paying customers because the limiter died is worse than briefly over-serving; the limiter protects capacity, it is not the product',
+      'Fail-closed would lose the audit log',
+      'Redis cannot fail-closed'
+    ],
+    answer: 1,
+    why: 'Product reasoning, not technical. And know the inversion: a login brute-force limiter fails CLOSED, because there the limiter IS the security control.'
+  },
+  {
+    q: 'The 2× burst problem: 100 requests at 11:59:59 and 100 more at 12:00:00 all pass a 100/min limit. Which algorithm has this flaw?',
+    options: ['Token bucket', 'Sliding window counter', 'Fixed window', 'Sliding window log'],
+    answer: 2,
+    why: 'Fixed window resets the counter at the boundary, so back-to-back windows each admit a full quota. This is THE standard rate-limiter follow-up question.'
+  },
+  {
+    q: 'Two gateway nodes concurrently check a bucket with 1 token and both admit. The 5ms-budget-respecting fix is:',
+    options: [
+      'Distributed lock (Redlock) around the check',
+      'Postgres row lock on the counter',
+      'Lua script in Redis — check+refill+decrement executes atomically in one round trip',
+      'Retry loop with compare-and-swap'
+    ],
+    answer: 2,
+    why: 'Redis executes Lua single-threaded: atomicity for free, one round trip. Locks add round trips and a failure mode; Postgres is disk-latency-class; CAS retries have unbounded tail latency.'
+  },
+  {
+    q: 'Memory estimate said 50 MB, yet we run a Redis cluster. An interviewer asks why. Best answer:',
+    options: [
+      'Standard practice for production Redis',
+      'The estimate is probably wrong at peak',
+      'Capacity needs one node; 1M QPS of operations and surviving node failure need a cluster — throughput- and availability-driven, not capacity-driven',
+      'Cluster mode enables Lua scripts'
+    ],
+    answer: 2,
+    why: 'Naming WHICH constraint drives the cluster (ops/s + availability, not GB) is the senior-signal sentence this whole design hinges on.'
+  }
+]} />
+
+## After this walkthrough
+
+Redo it cold in 35 minutes within 3 days — no notes, all six phases out loud, ideally to the buddy in mock mode. A walkthrough read is worth 20% of a walkthrough re-fought.

@@ -1,0 +1,146 @@
+---
+title: 'Back-of-Envelope Estimation'
+description: 'The 4-axis method — QPS, storage, bandwidth, memory — and the two unit-math killers that produce 1000× errors.'
+module: 1
+order: 2
+minutes: 25
+---
+import Quiz from '../components/Quiz.astro';
+
+## The point of estimation (it is not math)
+
+Interviewers don't care whether you land on 11,600 QPS or 12,000 QPS. They care whether your numbers **end in design decisions**. Every estimate must terminate in a sentence like:
+
+> "~12K read QPS → a single Postgres won't enjoy that → cache tier in front."
+
+No conclusion, no credit. That's the whole game.
+
+## The 4 axes — compute in this order
+
+| Axis | Question it answers | Design decision it feeds |
+|------|--------------------|--------------------------|
+| **QPS** | How many requests hit us per second? | # of app servers, cache or not, LB needed |
+| **Storage** | How big does the dataset get? | One DB vs shards, retention policy |
+| **Bandwidth** | Bytes/sec in and out? | CDN or not — usually: *decide what to ignore* |
+| **Memory** | Does the working set fit in RAM? | 1 cache node vs cluster |
+
+## Axis 1 — QPS: the ÷10⁵ rule
+
+A day is 86,400 seconds. **Round it to 10⁵.** The error (13%) is smaller than the error in your DAU guess anyway.
+
+```
+requests/day ÷ 100,000 = average QPS
+```
+
+- 1M requests/day → **10 QPS** (tiny — one server, done)
+- 100M requests/day → **1,000 QPS** (real service — LB + several app servers)
+- 10B requests/day → **100,000 QPS** (big tech — cache tier mandatory, regional deployment conversation)
+
+Then **peak**: multiply average by 2–3× and *say the assumption out loud* — "assuming peak is ~3× average, that's 3K QPS peak." Interviewers reward stated assumptions and punish silent ones.
+
+Read/write split next: "100:1 read-heavy" instantly justifies caching and read replicas. Always name the ratio.
+
+## Axis 2 — Storage: carry units up the ladder
+
+The method: `records/day × bytes/record`, then **climb the unit ladder one rung at a time**, saying each rung.
+
+Byte-size anchors worth memorizing:
+
+| Thing | Size |
+|-------|------|
+| UUID / long ID | 16 B / 8 B |
+| Short text row (URL mapping, like) | ~100 B–500 B |
+| Tweet-ish record with metadata | ~1 KB |
+| Photo (compressed) | ~200 KB–1 MB |
+| Minute of video (1080p) | ~50 MB |
+
+Worked example — URL shortener, 1M new URLs/day, ~500 B/row:
+
+```
+1M × 500 B = 500 MB/day
+× 365      ≈ 180 GB/year
+× 5 years  ≈ 1 TB
+```
+
+Conclusion sentence: "1 TB over five years — a single Postgres instance holds this comfortably; sharding is not a day-one problem." **That sentence is the deliverable, not the 1 TB.**
+
+## Axis 3 — Bandwidth: decide what to ignore
+
+Bandwidth = QPS × payload size. For most text-payload systems the answer is "kilobytes per request at thousands of QPS → tens of MB/s → a non-issue, moving on." Saying *"bandwidth is a non-issue here, I'll skip it"* is a **correct and strong answer** — it shows judgment.
+
+It matters when payloads are media: video streaming, photo feeds, file upload. Then: CDN, presigned upload URLs, and the estimate decides CDN egress vs origin.
+
+## Axis 4 — Memory: working set → 1 node or cluster?
+
+The question is never "how big is the data" — it's **"how big is the HOT data?"** The 80/20 heuristic: ~20% of data serves ~80% of traffic; often even steeper.
+
+Rate limiter example — 50K API keys, one counter each:
+
+```
+50K keys × ~100 B (key + counter + timestamp) = 5 MB
+```
+
+Conclusion: "5 MB — fits in one Redis node's RAM a thousand times over; a cluster would be for availability, not capacity." Distinguishing **capacity-driven** from **availability-driven** clustering is a senior-level sentence — use it.
+
+## The two killers (caught live in your own reps)
+
+**Killer 1 — the unit slip.** GB↔TB confusion produces silent 1000× errors that poison every downstream conclusion. Antidote: climb the ladder **one rung at a time, out loud** — KB → MB → GB → TB. Never jump two rungs in your head.
+
+**Killer 2 — carrying stale numbers.** Reusing the previous problem's (or previous axis's) numbers because they're still on the whiteboard. Antidote: each axis starts by **re-stating its inputs from scratch**: "1M new URLs a day at 500 bytes each…"
+
+## The full sweep, end to end
+
+For any problem, this is the 5-minute script:
+
+1. "Let me get the numbers before designing."
+2. QPS: daily volume ÷ 10⁵, ×3 peak, read/write ratio → *conclusion*
+3. Storage: rows/day × bytes, ladder to 5 years → *conclusion*
+4. Bandwidth: payload × QPS → usually *"non-issue, skipping"*
+5. Memory: hot set size → *1 node vs cluster, capacity vs availability*
+6. Bridge: "The numbers say [X], so here's the shape I'd start with."
+
+<Quiz questions={[
+  {
+    q: '500M requests/day. Average QPS, using the ÷10⁵ rule?',
+    options: ['500', '5,000', '50,000', '5,787 — must use exact 86,400'],
+    answer: 1,
+    why: '500M ÷ 10⁵ = 5,000 QPS. The exact-math answer (5,787) wastes interview seconds for precision your DAU guess never had.'
+  },
+  {
+    q: 'You compute 200 GB/year for a metadata store. What is the REQUIRED next sentence?',
+    options: [
+      '"Let me double-check with exact byte counts"',
+      '"So in 5 years, 1 TB — single Postgres handles this; sharding is not a day-one problem"',
+      '"We should use Cassandra for scale"',
+      '"Adding a 30% buffer for indexes brings it to 260 GB"'
+    ],
+    answer: 1,
+    why: 'Every estimate must terminate in a design decision. 200 GB/yr is small — the decision is "no sharding yet." Jumping to Cassandra ignores your own numbers.'
+  },
+  {
+    q: 'Working set for a cache is 4 GB. Node has 64 GB RAM. Why might you still run 3 Redis nodes?',
+    options: [
+      'Capacity — 4 GB is too much for one node',
+      'Availability — surviving a node failure; capacity is a non-issue',
+      'Bandwidth — splitting network load',
+      'You would never run 3 nodes for 4 GB'
+    ],
+    answer: 1,
+    why: 'Capacity-driven vs availability-driven clustering. 4 GB fits trivially; replicas exist so a node death does not take the cache (and the DB behind it) down.'
+  },
+  {
+    q: 'Mid-estimation you catch yourself writing "0.5 TB/day" for 1M × 500 B. What killer is this?',
+    options: [
+      'The stale-numbers killer',
+      'The unit-slip killer — it is 500 MB/day; the jump skipped a rung and landed 1000× high',
+      'No killer — 0.5 TB is right',
+      'The peak-factor killer'
+    ],
+    answer: 1,
+    why: '1M × 500 B = 500,000,000 B = 500 MB. Writing TB is the GB↔TB class of slip — exactly the 1000× error caught in your live reps. Climb one rung at a time, out loud.'
+  }
+]} />
+
+## Drill for this week
+
+The transfer test: run the full 4-axis sweep on **URL shortener** (100M DAU, 10:1 read:write on redirects, 1M new URLs/day) — 8 minutes, out loud, every axis ending in a conclusion sentence. Then once more on **Twitter timeline reads**. Numbers are allowed to be rough; missing conclusion sentences are not.
